@@ -1,0 +1,49 @@
+# Bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# OS and editor files
+.DS_Store
+.vscode/
+.Rhistory
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Data and artifacts generated during local experimentation
+artifacts/generated/
+artifacts/*
+!artifacts/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# Local datasets and serialized artifacts
+*.csv
+*.tsv
+*.parquet
+*.pkl

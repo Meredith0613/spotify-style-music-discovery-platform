@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotify-hybrid-recommender"
+version = "0.1.0"
+description = "Spotify-Style Music Discovery Platform with Spotify OAuth, hybrid recommendation, ALS, Word2Vec-style embeddings, and offline evaluation."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Jui-Ching Yu" }
+]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "scipy>=1.13",
+  "requests>=2.32",
+  "python-dotenv>=1.0",
+  "streamlit>=1.44"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0"
+]
+
+[project.scripts]
+spotify-collect-sample = "app.sample_data_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
