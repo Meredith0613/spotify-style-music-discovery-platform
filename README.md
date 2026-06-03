@@ -1,5 +1,23 @@
 # Spotify-Style Music Discovery Platform
 
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
+[![Streamlit](https://img.shields.io/badge/Streamlit-App-red)]()
+[![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954)]()
+[![Tests](https://img.shields.io/badge/tests-91%20passed-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-v1.0%20portfolio--ready-success)]()
+
+A Spotify-style music discovery platform that combines real Spotify listening history, hybrid recommendation, ALS matrix factorization, Word2Vec-style track embeddings, mood-aware reranking, and explainable recommendations in an interactive Streamlit app.
+
+## What This Project Demonstrates
+
+- Real Spotify OAuth authentication and recent-listening personalization
+- Real Spotify candidate generation with graceful API fallback handling
+- Hybrid recommendation stack combining content similarity, implicit collaborative filtering, ALS, Word2Vec-style embeddings, novelty, and discovery signals
+- Mood and exploration-aware reranking for personalized music discovery
+- Explainable recommendation chains and Spotify track links
+- Offline evaluation with Precision@K, Recall@K, NDCG@K, diversity, and novelty metrics
+- Synthetic fallback mode for deterministic demos
+
 ## Project Overview
 
 This is an interview-ready Spotify-style music discovery platform built in Python. It combines Spotify OAuth login, real Spotify candidate generation, content-based similarity, implicit collaborative filtering, ALS matrix factorization, Word2Vec-style track embeddings, mood and exploration reranking, explainable recommendations, synthetic fallback mode, and offline evaluation on synthetic and Last.fm-style listening data.
@@ -80,6 +98,22 @@ Important modules:
 - Built a Spotify-style music discovery platform combining content-based similarity, implicit collaborative filtering, ALS matrix factorization, Word2Vec-style track embeddings, novelty, and discovery signals.
 - Integrated Spotify OAuth and real Spotify candidate generation to personalize recommendations from recent listening history while preserving synthetic fallback mode.
 - Evaluated recommendation quality using Precision@K, Recall@K, NDCG@K, diversity, and novelty metrics across synthetic and Last.fm-style benchmarks.
+
+## GitHub Repository Metadata
+
+Recommended GitHub About description:
+
+```text
+Spotify-style music discovery platform with Spotify OAuth, real-track recommendations, ALS, Word2Vec-style embeddings, explainable ranking, and offline evaluation.
+```
+
+Recommended GitHub topics:
+
+```text
+python, machine-learning, data-science, recommendation-system, recommender-systems, spotify, spotify-api, streamlit, music-recommendation, hybrid-recommender, collaborative-filtering, content-based-filtering, als, word2vec, offline-evaluation
+```
+
+The Website field can stay blank until the Streamlit demo is deployed. This repository should be pinned on the GitHub profile.
 
 ## Evaluation
 
@@ -187,6 +221,78 @@ Large data files are not committed.
 - ALS and Word2Vec-style embeddings need richer interaction overlap and longer listening sequences to outperform simpler content baselines.
 - Last.fm evaluation uses a candidate-aware benchmark for local practicality, not full exhaustive retrieval.
 - Spotify playlist creation/writeback is future work.
+
+## Release
+
+### v1.0 — Portfolio-ready Spotify-Style Music Discovery Platform
+
+Initial portfolio-ready release featuring Spotify OAuth, real Spotify candidate generation, hybrid ranking, ALS, Word2Vec-style embeddings, Streamlit UI, explanation layer, and offline evaluation reports.
+
+## Roadmap
+
+### v1.1 — Playlist Export + Recommendation Buckets
+
+Goal:
+Make the demo feel like a real product.
+
+Planned work:
+
+1. Spotify Playlist Creation
+
+- Add OAuth scopes:
+  - `playlist-modify-private`
+  - optionally `playlist-modify-public`
+- Add Spotify API methods:
+  - `create_playlist`
+  - `add_tracks_to_playlist`
+- Add UI button:
+  - Save recommendations to Spotify
+- Add playlist description metadata:
+  - mood
+  - exploration level
+  - generated timestamp
+
+2. Recommendation Buckets
+
+- Add UI sections:
+  - Familiar
+  - Discovery
+  - Mood-Based
+- Make mood/exploration changes visually obvious
+- Add short rationale for each bucket
+
+3. Tests
+
+- Test playlist API client methods with mocked requests
+- Test bucket ranking outputs differ by bucket
+- Test UI-safe fallback if playlist creation fails
+
+4. README / Demo polish
+
+- Add screenshots or GIF if available
+- Add architecture diagram and evaluation charts
+
+## Suggested GitHub Issues
+
+- v1.1: Add Spotify playlist creation and export flow
+- v1.1: Add Familiar / Discovery / Mood-Based recommendation buckets
+- Add architecture diagram and evaluation charts to README
+- Deploy Streamlit demo
+
+## Development Plan
+
+Suggested next branch:
+
+```bash
+git checkout -b feature/v1.1-playlist-export-buckets
+```
+
+Suggested future commits:
+
+- Add Spotify playlist write API methods
+- Add playlist export UI
+- Add recommendation bucket ranking
+- Update README for v1.1
 
 ## Future Work
 
