@@ -24,7 +24,11 @@ from services.spotify_recommendation_adapter import (
     SpotifyRecommendationAdapter,
     SpotifyRecommendationContext,
 )
-from services.spotify_candidate_service import SpotifyCandidateService, SpotifyRealRecommendationResult
+from services.spotify_candidate_service import (
+    RecommendationBucket,
+    SpotifyCandidateService,
+    SpotifyRealRecommendationResult,
+)
 from services.spotify_explanation_service import SpotifyExplanationService
 from services.spotify_reranking_service import SpotifyRerankingResult, SpotifyRerankingService
 from services.user_profile_service import ListeningHistorySnapshot, UserProfileService
@@ -1018,12 +1022,12 @@ def _render_recommendation_section(
         streamlit_module.info("No recommendations were available for the current setup.")
         return
 
-    bucketed_explanations = (
-        getattr(spotify_real_recommendation_result, "bucketed_explanations", {}) or {}
+    recommendation_buckets = (
+        _get_spotify_recommendation_buckets(spotify_real_recommendation_result)
         if spotify_real_recommendation_result is not None
-        else {}
+        else []
     )
-    if bucketed_explanations:
+    if recommendation_buckets:
         _render_spotify_bucket_sections(streamlit_module, spotify_real_recommendation_result)
     else:
         _render_recommendation_cards(
@@ -1044,14 +1048,21 @@ def _render_spotify_bucket_sections(
 ) -> None:
     """Render familiar, discovery, and mood-based Spotify recommendation buckets."""
 
-    bucketed_explanations = getattr(spotify_real_recommendation_result, "bucketed_explanations", {}) or {}
-    if not bucketed_explanations:
+    recommendation_buckets = _get_spotify_recommendation_buckets(spotify_real_recommendation_result)
+    if not recommendation_buckets:
         return
-    streamlit_module.caption("Spotify mode shows the selected number of cards in each bucket.")
-    for bucket_label, explanations in bucketed_explanations.items():
+    streamlit_module.caption(
+        "Spotify mode groups recommendations into Familiar, Discovery, and Mood-Based picks. "
+        "The recommendation count controls cards per bucket."
+    )
+    for bucket in recommendation_buckets:
+        bucket_label = bucket.bucket_label
+        explanations = bucket.recommendations
         if not explanations:
             continue
         streamlit_module.markdown(f"**{bucket_label}**")
+        if bucket.description:
+            streamlit_module.caption(bucket.description)
         bucket_columns = streamlit_module.columns(2)
         for index, explanation in enumerate(explanations):
             card_column = bucket_columns[index % len(bucket_columns)]
@@ -1088,6 +1099,27 @@ def _render_spotify_bucket_sections(
                     ),
                     unsafe_allow_html=True,
                 )
+
+
+def _get_spotify_recommendation_buckets(
+    spotify_real_recommendation_result: SpotifyRealRecommendationResult,
+) -> list[RecommendationBucket]:
+    """Return new bucket objects, falling back to legacy bucket dictionaries."""
+
+    recommendation_buckets = getattr(spotify_real_recommendation_result, "recommendation_buckets", []) or []
+    if recommendation_buckets:
+        return recommendation_buckets
+
+    bucketed_explanations = getattr(spotify_real_recommendation_result, "bucketed_explanations", {}) or {}
+    return [
+        RecommendationBucket(
+            bucket_name=bucket_label.lower().replace(" ", "_"),
+            bucket_label=bucket_label,
+            description="",
+            recommendations=explanations,
+        )
+        for bucket_label, explanations in bucketed_explanations.items()
+    ]
 
 
 def _render_recommendation_cards(

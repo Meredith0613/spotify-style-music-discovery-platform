@@ -10,9 +10,9 @@ import pandas as pd
 from config.settings import ProjectSettings
 from data.preprocessor import Preprocessor
 from data.spotify_client import SpotifyAPIClientError
-from app.streamlit_app import _render_spotify_candidate_debug_summary
+from app.streamlit_app import _get_spotify_recommendation_buckets, _render_spotify_candidate_debug_summary
 from models.hybrid_recommender import HybridRecommendation, HybridScoreBreakdown
-from services.spotify_candidate_service import SpotifyCandidateService, SpotifyCandidateSet
+from services.spotify_candidate_service import RecommendationBucket, SpotifyCandidateService, SpotifyCandidateSet
 from services.user_profile_service import ListeningHistorySnapshot, RecentTrackSummary
 
 
@@ -125,6 +125,15 @@ class FakeSpotifyResult:
         """Store a candidate set."""
 
         self.candidate_set = candidate_set
+
+
+class LegacyBucketResult:
+    """Represent an older real recommendation result with only the legacy bucket dict."""
+
+    def __init__(self, bucketed_explanations: dict[str, list[Any]]) -> None:
+        """Store legacy bucket explanations."""
+
+        self.bucketed_explanations = bucketed_explanations
 
 
 def build_settings(tmp_path: Path) -> ProjectSettings:
@@ -270,10 +279,15 @@ def test_spotify_candidate_service_returns_real_spotify_tracks(tmp_path: Path) -
     assert result.candidate_set.debug_summary["top_track_candidate_count"] == 2
     assert result.candidate_set.debug_summary["search_candidate_count"] == 1
     assert result.candidate_set.debug_summary["ranking_mode"] == "audio-feature-based"
+    assert [bucket.bucket_name for bucket in result.recommendation_buckets] == [
+        "familiar",
+        "discovery",
+        "mood_based",
+    ]
     assert set(result.bucketed_explanations) == {
-        "Familiar picks",
-        "Discovery picks",
-        "Mood-based picks",
+        "Familiar Picks",
+        "Discovery Picks",
+        "Mood-Based Picks",
     }
 
 
@@ -292,11 +306,36 @@ def test_spotify_candidate_service_bucket_generation_returns_distinct_lists(tmp_
     )
 
     assert result is not None
-    familiar_ids = [explanation.track_id for explanation in result.bucketed_explanations["Familiar picks"]]
-    discovery_ids = [explanation.track_id for explanation in result.bucketed_explanations["Discovery picks"]]
-    mood_ids = [explanation.track_id for explanation in result.bucketed_explanations["Mood-based picks"]]
+    familiar_ids = [explanation.track_id for explanation in result.bucketed_explanations["Familiar Picks"]]
+    discovery_ids = [explanation.track_id for explanation in result.bucketed_explanations["Discovery Picks"]]
+    mood_ids = [explanation.track_id for explanation in result.bucketed_explanations["Mood-Based Picks"]]
     assert familiar_ids != discovery_ids
     assert mood_ids
+
+
+def test_recommendation_bucket_can_be_constructed() -> None:
+    """The lightweight bucket representation should be safe for UI fallback code."""
+
+    bucket = RecommendationBucket(
+        bucket_name="familiar",
+        bucket_label="Familiar Picks",
+        description="Close to recent listening.",
+        recommendations=[],
+    )
+
+    assert bucket.bucket_name == "familiar"
+    assert bucket.recommendations == []
+
+
+def test_spotify_bucket_ui_helper_falls_back_to_legacy_bucket_dict() -> None:
+    """The UI should keep rendering older cached bucket result objects."""
+
+    buckets = _get_spotify_recommendation_buckets(
+        LegacyBucketResult({"Familiar Picks": []})  # type: ignore[arg-type]
+    )
+
+    assert buckets[0].bucket_label == "Familiar Picks"
+    assert buckets[0].recommendations == []
 
 
 def test_spotify_candidate_set_debug_summary_defaults_empty() -> None:
@@ -545,17 +584,80 @@ def test_spotify_candidate_service_mood_bucket_changes_with_mood(tmp_path: Path)
         candidate_set=candidate_set,
         mood_label="happy",
         recommendation_count=2,
-    )["Mood-based picks"]
+    )["Mood-Based Picks"]
     calm_bucket = service._build_bucketed_explanations(
         candidate_catalog=candidate_set.track_catalog,
         listening_history_snapshot=build_snapshot(),
         candidate_set=candidate_set,
         mood_label="calm",
         recommendation_count=2,
-    )["Mood-based picks"]
+    )["Mood-Based Picks"]
 
     assert happy_bucket[0].track_id == "happy_track"
     assert calm_bucket[0].track_id == "calm_track"
+
+
+def test_spotify_candidate_service_exploration_changes_bucket_ranking(tmp_path: Path) -> None:
+    """Low and high exploration should visibly change bucket order."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    candidate_set = SpotifyCandidateSet(
+        candidates=[],
+        track_catalog=pd.DataFrame(
+            [
+                {
+                    "track_id": "familiar",
+                    "track_name": "Familiar Hit",
+                    "artist_name": "Aurora Lane",
+                    "artist_genres": "indie pop",
+                    "catalog_popularity": 0.95,
+                    "catalog_novelty": 0.05,
+                    "candidate_sources": "recent artist top track",
+                    "ranking_mode": "metadata-only",
+                    "spotify_url": "https://open.spotify.com/track/familiar",
+                    "album_image_url": "",
+                },
+                {
+                    "track_id": "discovery",
+                    "track_name": "Deep Search Find",
+                    "artist_name": "New Artist",
+                    "artist_genres": "ambient",
+                    "catalog_popularity": 0.10,
+                    "catalog_novelty": 0.90,
+                    "candidate_sources": "recent artist search match",
+                    "ranking_mode": "metadata-only",
+                    "spotify_url": "https://open.spotify.com/track/discovery",
+                    "album_image_url": "",
+                },
+            ]
+        ),
+        source_labels_by_track_id={
+            "familiar": ["recent artist top track"],
+            "discovery": ["recent artist search match"],
+        },
+    )
+
+    low_exploration_buckets = service._build_recommendation_buckets(
+        candidate_catalog=candidate_set.track_catalog,
+        listening_history_snapshot=build_snapshot(),
+        candidate_set=candidate_set,
+        exploration_level=0.0,
+        mood_label="calm",
+        recommendation_count=2,
+    )
+    high_exploration_buckets = service._build_recommendation_buckets(
+        candidate_catalog=candidate_set.track_catalog,
+        listening_history_snapshot=build_snapshot(),
+        candidate_set=candidate_set,
+        exploration_level=1.0,
+        mood_label="calm",
+        recommendation_count=2,
+    )
+
+    low_familiar = low_exploration_buckets[0].recommendations
+    high_discovery = high_exploration_buckets[1].recommendations
+    assert low_familiar[0].track_id == "familiar"
+    assert high_discovery[0].track_id == "discovery"
 
 
 def test_spotify_candidate_service_calm_and_workout_change_ranked_order(tmp_path: Path) -> None:
@@ -637,6 +739,7 @@ def test_spotify_candidate_service_recommendation_count_controls_output_length(t
     assert result is not None
     assert len(result.view_state.recommendations) == 1
     assert len(result.view_state.explanations) == 1
+    assert all(len(bucket.recommendations) == 1 for bucket in result.recommendation_buckets)
 
 
 def test_spotify_candidate_service_debug_summary_tracks_selected_controls(tmp_path: Path) -> None:

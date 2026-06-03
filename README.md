@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-red)]()
 [![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954)]()
-[![Tests](https://img.shields.io/badge/tests-91%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-94%20passed-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-v1.0%20portfolio--ready-success)]()
 
 A Spotify-style music discovery platform that combines real Spotify listening history, hybrid recommendation, ALS matrix factorization, Word2Vec-style track embeddings, mood-aware reranking, and explainable recommendations in an interactive Streamlit app.
@@ -228,9 +228,19 @@ Large data files are not committed.
 
 Initial portfolio-ready release featuring Spotify OAuth, real Spotify candidate generation, hybrid ranking, ALS, Word2Vec-style embeddings, Streamlit UI, explanation layer, and offline evaluation reports.
 
+### v1.1 progress — Recommendation Buckets
+
+Recommendation Buckets are implemented for Spotify real-track mode:
+
+- Familiar Picks prioritize recent artists, top-track candidates, and popularity.
+- Discovery Picks prioritize novelty, search-discovered candidates, and artist variety.
+- Mood-Based Picks prioritize the selected mood using audio features when available, with metadata-only fallback.
+
+Spotify playlist creation/writeback remains future work.
+
 ## Roadmap
 
-### v1.1 — Playlist Export + Recommendation Buckets
+### v1.1 — Playlist Export + Recommendation Bucket Polish
 
 Goal:
 Make the demo feel like a real product.
@@ -254,17 +264,17 @@ Planned work:
 
 2. Recommendation Buckets
 
-- Add UI sections:
+- Implemented UI sections:
   - Familiar
   - Discovery
   - Mood-Based
-- Make mood/exploration changes visually obvious
-- Add short rationale for each bucket
+- Continue polishing mood/exploration contrast as more candidate data becomes available
+- Keep short rationale for each bucket
 
 3. Tests
 
 - Test playlist API client methods with mocked requests
-- Test bucket ranking outputs differ by bucket
+- Test bucket ranking outputs differ by bucket and controls
 - Test UI-safe fallback if playlist creation fails
 
 4. README / Demo polish
@@ -275,7 +285,7 @@ Planned work:
 ## Suggested GitHub Issues
 
 - v1.1: Add Spotify playlist creation and export flow
-- v1.1: Add Familiar / Discovery / Mood-Based recommendation buckets
+- v1.1: Polish Familiar / Discovery / Mood-Based recommendation buckets
 - Add architecture diagram and evaluation charts to README
 - Deploy Streamlit demo
 
@@ -291,7 +301,7 @@ Suggested future commits:
 
 - Add Spotify playlist write API methods
 - Add playlist export UI
-- Add recommendation bucket ranking
+- Polish recommendation bucket ranking
 - Update README for v1.1
 
 ## Future Work

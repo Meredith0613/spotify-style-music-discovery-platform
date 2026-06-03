@@ -52,12 +52,23 @@ class SpotifyCandidateSet:
 
 
 @dataclass(slots=True)
+class RecommendationBucket:
+    """UI-ready group of Spotify recommendations for one product intent."""
+
+    bucket_name: str
+    bucket_label: str
+    description: str
+    recommendations: list[DemoRecommendationExplanation]
+
+
+@dataclass(slots=True)
 class SpotifyRealRecommendationResult:
     """Store a UI-ready real Spotify recommendation view."""
 
     view_state: DemoViewState
     candidate_set: SpotifyCandidateSet
     source_message: str
+    recommendation_buckets: list[RecommendationBucket] = field(default_factory=list)
     bucketed_explanations: dict[str, list[DemoRecommendationExplanation]] = field(default_factory=dict)
 
 
@@ -133,13 +144,18 @@ class SpotifyCandidateService:
             mood_label=mood_label,
             bucket_label="Balanced",
         )
-        bucketed_explanations = self._build_bucketed_explanations(
+        recommendation_buckets = self._build_recommendation_buckets(
             candidate_catalog=candidate_set.track_catalog,
             listening_history_snapshot=listening_history_snapshot,
             candidate_set=candidate_set,
+            exploration_level=exploration_level,
             mood_label=mood_label,
             recommendation_count=recommendation_count,
         )
+        bucketed_explanations = {
+            bucket.bucket_label: bucket.recommendations
+            for bucket in recommendation_buckets
+        }
         playlist = self.playlist_generator.generate_playlist(
             candidate_tracks=self._build_playlist_candidate_frame(recommendations, candidate_set.track_catalog),
             mood_label=mood_label,
@@ -158,6 +174,7 @@ class SpotifyCandidateService:
             view_state=view_state,
             candidate_set=candidate_set,
             source_message="Spotify real-track recommendations generated from your recent listening.",
+            recommendation_buckets=recommendation_buckets,
             bucketed_explanations=bucketed_explanations,
         )
 
@@ -541,56 +558,104 @@ class SpotifyCandidateService:
         mood_label: str,
         recommendation_count: int,
     ) -> dict[str, list[DemoRecommendationExplanation]]:
+        """Return legacy bucket mapping for older UI/tests."""
+
+        buckets = self._build_recommendation_buckets(
+            candidate_catalog=candidate_catalog,
+            listening_history_snapshot=listening_history_snapshot,
+            candidate_set=candidate_set,
+            exploration_level=0.5,
+            mood_label=mood_label,
+            recommendation_count=recommendation_count,
+        )
+        return {bucket.bucket_label: bucket.recommendations for bucket in buckets}
+
+    def _build_recommendation_buckets(
+        self,
+        candidate_catalog: pd.DataFrame,
+        listening_history_snapshot: ListeningHistorySnapshot,
+        candidate_set: SpotifyCandidateSet,
+        exploration_level: float,
+        mood_label: str,
+        recommendation_count: int,
+    ) -> list[RecommendationBucket]:
         """Build distinct familiar, discovery, and mood-specific Spotify buckets."""
 
         if candidate_catalog.empty:
-            return {}
+            return []
 
         per_bucket_count = max(int(recommendation_count), 1)
-        bucketed_recommendations = {
-            "Familiar picks": self._rank_bucket_candidates(
-                candidate_catalog=candidate_catalog,
-                listening_history_snapshot=listening_history_snapshot,
-                mood_label=mood_label,
-                bucket_label="Familiar",
-                limit=per_bucket_count,
+        bucket_specs = [
+            (
+                "familiar",
+                "Familiar Picks",
+                "Close to your recent artists/listening, favoring top-track and popularity signals.",
+                self._rank_bucket_candidates(
+                    candidate_catalog=candidate_catalog,
+                    listening_history_snapshot=listening_history_snapshot,
+                    exploration_level=exploration_level,
+                    mood_label=mood_label,
+                    bucket_label="Familiar",
+                    limit=per_bucket_count,
+                ),
             ),
-            "Discovery picks": self._rank_bucket_candidates(
-                candidate_catalog=candidate_catalog,
-                listening_history_snapshot=listening_history_snapshot,
-                mood_label=mood_label,
-                bucket_label="Discovery",
-                limit=per_bucket_count,
+            (
+                "discovery",
+                "Discovery Picks",
+                "Adds novelty from search-discovered tracks, less familiar artists, and lower popularity.",
+                self._rank_bucket_candidates(
+                    candidate_catalog=candidate_catalog,
+                    listening_history_snapshot=listening_history_snapshot,
+                    exploration_level=exploration_level,
+                    mood_label=mood_label,
+                    bucket_label="Discovery",
+                    limit=per_bucket_count,
+                ),
             ),
-            "Mood-based picks": self._rank_bucket_candidates(
-                candidate_catalog=candidate_catalog,
-                listening_history_snapshot=listening_history_snapshot,
-                mood_label=mood_label,
-                bucket_label="Mood-based",
-                limit=per_bucket_count,
+            (
+                "mood_based",
+                "Mood-Based Picks",
+                "Ranked for the selected mood using audio features when available or metadata-only signals.",
+                self._rank_bucket_candidates(
+                    candidate_catalog=candidate_catalog,
+                    listening_history_snapshot=listening_history_snapshot,
+                    exploration_level=exploration_level,
+                    mood_label=mood_label,
+                    bucket_label="Mood-based",
+                    limit=per_bucket_count,
+                ),
             ),
-        }
-        return {
-            label: self._build_explanations(
-                recommendations=recommendations,
-                listening_history_snapshot=listening_history_snapshot,
-                candidate_set=candidate_set,
-                mood_label=mood_label,
-                bucket_label=label,
+        ]
+        return [
+            RecommendationBucket(
+                bucket_name=bucket_name,
+                bucket_label=bucket_label,
+                description=description,
+                recommendations=self._build_explanations(
+                    recommendations=recommendations,
+                    listening_history_snapshot=listening_history_snapshot,
+                    candidate_set=candidate_set,
+                    mood_label=mood_label,
+                    bucket_label=bucket_label,
+                ),
             )
-            for label, recommendations in bucketed_recommendations.items()
-        }
+            for bucket_name, bucket_label, description, recommendations in bucket_specs
+        ]
 
     def _rank_bucket_candidates(
         self,
         candidate_catalog: pd.DataFrame,
         listening_history_snapshot: ListeningHistorySnapshot,
+        exploration_level: float,
         mood_label: str,
         bucket_label: str,
         limit: int,
     ) -> list[HybridRecommendation]:
         """Rank one explainable Spotify recommendation bucket."""
 
+        bounded_exploration = min(max(float(exploration_level), 0.0), 1.0)
+        familiarity_preference = 1.0 - bounded_exploration
+        discovery_preference = bounded_exploration
         recent_artist_affinity = self._build_recent_artist_affinity(listening_history_snapshot)
         scored_recommendations: list[HybridRecommendation] = []
         seen_artist_counts: Counter[str] = Counter()
@@ -603,13 +668,27 @@ class SpotifyCandidateService:
             is_top_track = "top track" in source_labels
             is_search = "search" in source_labels
             artist_affinity = recent_artist_affinity.get(artist_name, 0.0)
+            mood_alignment = self._compute_mood_alignment(track_row, mood_label)
             if bucket_label == "Familiar":
-                score = (2.0 * artist_affinity) + (1.25 if is_top_track else 0.0) + (1.15 * popularity)
+                score = (
+                    ((2.2 + (1.4 * familiarity_preference)) * artist_affinity)
+                    + ((1.1 + (0.7 * familiarity_preference)) if is_top_track else 0.0)
+                    + ((1.1 + (0.6 * familiarity_preference)) * popularity)
+                    + (0.25 * mood_alignment)
+                    - (0.45 * discovery_preference * novelty)
+                )
             elif bucket_label == "Discovery":
                 diversity_penalty = 0.45 * seen_artist_counts[artist_name]
-                score = (1.8 * novelty) + (1.4 if is_search else 0.0) - (0.65 * popularity) - diversity_penalty
+                score = (
+                    ((1.9 + (1.5 * discovery_preference)) * novelty)
+                    + ((1.2 + (0.9 * discovery_preference)) if is_search else 0.0)
+                    + (0.45 * mood_alignment)
+                    - ((0.6 + (0.5 * discovery_preference)) * artist_affinity)
+                    - (0.40 * popularity)
+                    - diversity_penalty
+                )
             else:
-                score = (2.8 * self._compute_mood_alignment(track_row, mood_label)) + (0.25 * novelty)
+                score = (3.1 * mood_alignment) + (0.25 * novelty) + (0.10 if is_search else 0.0)
 
             scored_recommendations.append(
                 self._build_bucket_recommendation(
@@ -658,11 +737,11 @@ class SpotifyCandidateService:
         """Return concise bucket-specific recommendation rationale."""
 
         ranking_mode = str(track_row.get("ranking_mode", "metadata-only")).replace("-", " ")
-        if bucket_label == "Familiar picks":
+        if bucket_label == "Familiar Picks":
             return "Similar to your recent artists/listening, with familiar Spotify candidate signals."
-        if bucket_label == "Discovery picks":
+        if bucket_label == "Discovery Picks":
             return "Adds novelty from search-discovered candidates and more varied artists."
-        if bucket_label == "Mood-based picks":
+        if bucket_label == "Mood-Based Picks":
             return f"Ranked for the selected mood using {ranking_mode} signals."
         return "Ranking blends similarity to recent listening, artist affinity, mood fit, novelty, and popularity."
 
