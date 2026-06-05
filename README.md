@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-red)]()
 [![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954)]()
-[![Tests](https://img.shields.io/badge/tests-94%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-104%20passed-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-v1.0%20portfolio--ready-success)]()
 
 A Spotify-style music discovery platform that combines real Spotify listening history, hybrid recommendation, ALS matrix factorization, Word2Vec-style track embeddings, mood-aware reranking, and explainable recommendations in an interactive Streamlit app.
@@ -44,6 +44,7 @@ This is not a production-scale Spotify deployment. It is a portfolio project tha
 - **Spotify login and recent listening history**: PKCE OAuth flow fetches the authenticated user's recent tracks.
 - **Real Spotify candidate generation**: Spotify mode builds real-track candidates from recent artists, artist top tracks, and search.
 - **Recommendation buckets**: Spotify mode can show familiar, discovery, and mood-based recommendation sections.
+- **Spotify playlist export**: Real Spotify recommendations can be saved into a private Spotify playlist.
 - **Streamlit UI**: The app is demoable locally with or without Spotify credentials.
 - **Explainable recommendation chain**: Recommendation cards show rationale, source labels, Spotify links, and album art when available.
 - **Mood-aware playlist generation**: Recommendations can be sequenced into an interpretable mood-aware playlist.
@@ -178,14 +179,14 @@ Create a repo-root `.env` from `.env.example`.
 SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 SPOTIFY_REDIRECT_URI=http://localhost:8501/callback
-SPOTIFY_OAUTH_SCOPES=user-read-recently-played
+SPOTIFY_OAUTH_SCOPES=user-read-recently-played playlist-modify-private
 SPOTIFY_API_BASE_URL=https://api.spotify.com/v1
 SPOTIFY_ACCOUNTS_BASE_URL=https://accounts.spotify.com
 SPOTIFY_REQUEST_TIMEOUT_SECONDS=30
 SPOTIFY_DEFAULT_MARKET=US
 ```
 
-The Streamlit login flow needs `SPOTIFY_CLIENT_ID`, `SPOTIFY_REDIRECT_URI`, and `SPOTIFY_OAUTH_SCOPES`. `SPOTIFY_CLIENT_SECRET` is used by client-credentials collection workflows and is kept in `.env.example` as a placeholder only.
+The Streamlit login flow needs `SPOTIFY_CLIENT_ID`, `SPOTIFY_REDIRECT_URI`, and `SPOTIFY_OAUTH_SCOPES`. `playlist-modify-private` is required only for saving real Spotify recommendations into a private Spotify playlist. Users who only keep `user-read-recently-played` can still log in and receive recommendations, but playlist export will show a re-login instruction. `SPOTIFY_CLIENT_SECRET` is used by client-credentials collection workflows and is kept in `.env.example` as a placeholder only.
 
 ## Spotify Setup
 
@@ -198,11 +199,12 @@ The Streamlit login flow needs `SPOTIFY_CLIENT_ID`, `SPOTIFY_REDIRECT_URI`, and 
 
 3. Put the same redirect URI in `.env`.
 4. If the Spotify app is in development mode, add your Spotify account as an allowlisted user.
-5. Use `user-read-recently-played` as the required OAuth scope.
+5. Use `user-read-recently-played` for recommendation personalization.
+6. Add `playlist-modify-private` if you want to save recommendations into a private Spotify playlist.
 
 Spotify may deny or omit some metadata endpoints, especially audio features in some user-scoped flows. The app handles this by falling back to metadata-only ranking and compact user-facing warnings.
 
-Playlist writeback is not implemented. If future work adds Spotify playlist creation, the app will need playlist write scopes such as `playlist-modify-private` or `playlist-modify-public`.
+Playlist export creates private playlists by default and requires `playlist-modify-private`.
 
 ## Data
 
@@ -220,7 +222,7 @@ Large data files are not committed.
 - Audio features may be unavailable; the app falls back safely.
 - ALS and Word2Vec-style embeddings need richer interaction overlap and longer listening sequences to outperform simpler content baselines.
 - Last.fm evaluation uses a candidate-aware benchmark for local practicality, not full exhaustive retrieval.
-- Spotify playlist creation/writeback is future work.
+- Spotify playlist export is private-playlist only in this prototype.
 
 ## Release
 
@@ -236,11 +238,19 @@ Recommendation Buckets are implemented for Spotify real-track mode:
 - Discovery Picks prioritize novelty, search-discovered candidates, and artist variety.
 - Mood-Based Picks prioritize the selected mood using audio features when available, with metadata-only fallback.
 
-Spotify playlist creation/writeback remains future work.
+Playlist export is added in v1.2 for private Spotify playlists.
+
+### v1.2 progress — Spotify Playlist Export
+
+Spotify Playlist Export is implemented for real Spotify recommendation mode:
+
+- Users can save real Spotify recommendations into a private Spotify playlist.
+- The playlist description includes mood, exploration level, generation timestamp, and source metadata.
+- Bucket recommendations can be exported with duplicates removed before tracks are added.
 
 ## Roadmap
 
-### v1.1 — Playlist Export + Recommendation Bucket Polish
+### v1.1/v1.2 — Playlist Export + Recommendation Bucket Polish
 
 Goal:
 Make the demo feel like a real product.
@@ -249,15 +259,14 @@ Planned work:
 
 1. Spotify Playlist Creation
 
-- Add OAuth scopes:
+- Implemented OAuth scope:
   - `playlist-modify-private`
-  - optionally `playlist-modify-public`
-- Add Spotify API methods:
+- Implemented Spotify API methods:
   - `create_playlist`
   - `add_tracks_to_playlist`
-- Add UI button:
+- Implemented UI button:
   - Save recommendations to Spotify
-- Add playlist description metadata:
+- Implemented playlist description metadata:
   - mood
   - exploration level
   - generated timestamp
@@ -284,7 +293,7 @@ Planned work:
 
 ## Suggested GitHub Issues
 
-- v1.1: Add Spotify playlist creation and export flow
+- v1.2: Polish Spotify playlist export flow
 - v1.1: Polish Familiar / Discovery / Mood-Based recommendation buckets
 - Add architecture diagram and evaluation charts to README
 - Deploy Streamlit demo
@@ -294,19 +303,18 @@ Planned work:
 Suggested next branch:
 
 ```bash
-git checkout -b feature/v1.1-playlist-export-buckets
+git checkout -b feature/v1.2-playlist-export
 ```
 
 Suggested future commits:
 
-- Add Spotify playlist write API methods
-- Add playlist export UI
+- Polish Spotify playlist export UI
 - Polish recommendation bucket ranking
-- Update README for v1.1
+- Update README for v1.2
 
 ## Future Work
 
-- Spotify playlist creation/writeback.
+- Public playlist export support.
 - Stronger real-world evaluation with sampled negatives and full-catalog retrieval experiments.
 - Better listening-session construction and session-aware sequence modeling.
 - Experiment tracking for model settings and evaluation runs.

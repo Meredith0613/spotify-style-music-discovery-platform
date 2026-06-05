@@ -304,6 +304,68 @@ class SpotifyAPIClient:
 
         return self._get_json("/me", access_token=access_token)
 
+    def create_playlist(
+        self,
+        user_token: str,
+        user_id: str,
+        playlist_name: str,
+        description: str,
+        public: bool = False,
+    ) -> dict[str, Any]:
+        """Create a Spotify playlist for the authenticated user."""
+
+        payload = self._post_json(
+            f"/users/{user_id}/playlists",
+            payload={
+                "name": playlist_name,
+                "description": description,
+                "public": bool(public),
+            },
+            access_token=user_token,
+        )
+        return {
+            "playlist_id": str(payload.get("id", "")).strip(),
+            "playlist_url": str((payload.get("external_urls") or {}).get("spotify", "")).strip(),
+            "payload": payload,
+        }
+
+    def add_tracks_to_playlist(
+        self,
+        user_token: str,
+        playlist_id: str,
+        track_uris: list[str] | None = None,
+        spotify_track_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add unique Spotify tracks to a playlist, accepting IDs or URIs."""
+
+        normalized_track_uris = self._normalize_track_uris(
+            list(track_uris or []) + list(spotify_track_ids or [])
+        )
+        if not normalized_track_uris:
+            return {
+                "playlist_id": playlist_id,
+                "track_uris": [],
+                "added_track_count": 0,
+                "snapshot_ids": [],
+            }
+
+        snapshot_ids: list[str] = []
+        for uri_batch in self._chunk_values(normalized_track_uris, 100):
+            payload = self._post_json(
+                f"/playlists/{playlist_id}/tracks",
+                payload={"uris": uri_batch},
+                access_token=user_token,
+            )
+            snapshot_id = str(payload.get("snapshot_id", "")).strip()
+            if snapshot_id:
+                snapshot_ids.append(snapshot_id)
+        return {
+            "playlist_id": playlist_id,
+            "track_uris": normalized_track_uris,
+            "added_track_count": len(normalized_track_uris),
+            "snapshot_ids": snapshot_ids,
+        }
+
     def get_current_user_recent_tracks(
         self,
         access_token: str,
@@ -405,6 +467,28 @@ class SpotifyAPIClient:
         self._raise_for_status(response, f"Spotify GET request failed for {request_url}")
         return response.json()
 
+    def _post_json(
+        self,
+        endpoint_or_url: str,
+        payload: dict[str, Any],
+        *,
+        access_token: str,
+        absolute_url: bool = False,
+    ) -> dict[str, Any]:
+        """Execute an authenticated POST request and return parsed JSON."""
+
+        request_url = endpoint_or_url if absolute_url else f"{self.api_base_url}{endpoint_or_url}"
+        headers = self._build_api_headers(access_token)
+        headers["Content-Type"] = "application/json"
+        response = self.session.post(
+            request_url,
+            json=payload,
+            headers=headers,
+            timeout=self.request_timeout_seconds,
+        )
+        self._raise_for_status(response, f"Spotify POST request failed for {request_url}")
+        return response.json()
+
     def _build_api_headers(self, token: str) -> dict[str, str]:
         """Build standard headers for authenticated Spotify GET requests.
 
@@ -419,6 +503,28 @@ class SpotifyAPIClient:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
         }
+
+    def _normalize_track_uris(self, track_values: list[str]) -> list[str]:
+        """Normalize Spotify track IDs, URLs, and URIs into unique track URIs."""
+
+        normalized_uris: list[str] = []
+        seen_uris: set[str] = set()
+        for track_value in track_values:
+            value = str(track_value).strip()
+            if not value:
+                continue
+            if value.startswith("spotify:track:"):
+                uri = value
+            elif "open.spotify.com/track/" in value:
+                track_id = value.split("open.spotify.com/track/", maxsplit=1)[1].split("?", maxsplit=1)[0]
+                uri = f"spotify:track:{track_id}"
+            else:
+                uri = f"spotify:track:{value}"
+            if uri in seen_uris:
+                continue
+            seen_uris.add(uri)
+            normalized_uris.append(uri)
+        return normalized_uris
 
     def _raise_for_status(self, response: requests.Response, message: str) -> None:
         """Raise a descriptive client error when an HTTP request fails.

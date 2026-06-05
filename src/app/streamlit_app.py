@@ -30,6 +30,11 @@ from services.spotify_candidate_service import (
     SpotifyRealRecommendationResult,
 )
 from services.spotify_explanation_service import SpotifyExplanationService
+from services.spotify_playlist_export_service import (
+    PLAYLIST_EXPORT_REQUIRED_SCOPE,
+    SpotifyPlaylistExportResult,
+    SpotifyPlaylistExportService,
+)
 from services.spotify_reranking_service import SpotifyRerankingResult, SpotifyRerankingService
 from services.user_profile_service import ListeningHistorySnapshot, UserProfileService
 
@@ -62,6 +67,7 @@ def run_app() -> None:
     user_profile_service = _get_user_profile_service(st, settings)
     spotify_recommendation_adapter = _get_spotify_recommendation_adapter(st)
     spotify_candidate_service = _get_spotify_candidate_service(st, settings)
+    spotify_playlist_export_service = _get_spotify_playlist_export_service(st, settings)
     spotify_explanation_service = _get_spotify_explanation_service(st)
     spotify_reranking_service = _get_spotify_reranking_service(st)
 
@@ -201,6 +207,14 @@ def run_app() -> None:
         spotify_recommendation_context=spotify_recommendation_context,
         spotify_reranking_result=spotify_reranking_result,
         spotify_real_recommendation_result=spotify_real_recommendation_result,
+    )
+    _render_spotify_playlist_export_section(
+        st,
+        auth_manager=auth_manager,
+        spotify_playlist_export_service=spotify_playlist_export_service,
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+        listening_history_snapshot=listening_history_snapshot,
+        ui_state=ui_state,
     )
     _render_playlist_section(st, view_state)
     if ui_state.show_taste_clusters:
@@ -480,6 +494,21 @@ def _get_spotify_candidate_service(
         """Build the Spotify candidate service once per Streamlit session."""
 
         return SpotifyCandidateService.from_settings(settings)
+
+    return load_service()
+
+
+def _get_spotify_playlist_export_service(
+    streamlit_module: Any,
+    settings: ProjectSettings,
+) -> SpotifyPlaylistExportService:
+    """Return a cached service that creates Spotify playlists."""
+
+    @streamlit_module.cache_resource(show_spinner=False)
+    def load_service() -> SpotifyPlaylistExportService:
+        """Build the playlist export service once per Streamlit session."""
+
+        return SpotifyPlaylistExportService.from_settings(settings)
 
     return load_service()
 
@@ -764,6 +793,7 @@ def _render_auth_sidebar_section(
         auth_manager.clear_token(streamlit_module.session_state)
         streamlit_module.session_state.pop("spotify_login_url", None)
         streamlit_module.session_state.pop("spotify_callback_processed", None)
+        streamlit_module.session_state.pop("spotify_playlist_export_result", None)
         _clear_listening_history_cache(streamlit_module.session_state)
         streamlit_module.rerun()
 
@@ -1238,6 +1268,119 @@ def _render_recommendation_explanations(
             streamlit_module.markdown("**Model rationale**")
         for summary_line in selected_explanation.summary_lines:
             streamlit_module.write(f"- {summary_line}")
+
+
+def _render_spotify_playlist_export_section(
+    streamlit_module: Any,
+    *,
+    auth_manager: SpotifyAuthManager,
+    spotify_playlist_export_service: SpotifyPlaylistExportService,
+    spotify_real_recommendation_result: SpotifyRealRecommendationResult | None,
+    listening_history_snapshot: ListeningHistorySnapshot | None,
+    ui_state: DemoUIState,
+) -> None:
+    """Render Spotify playlist export controls for real-track recommendations."""
+
+    if spotify_real_recommendation_result is None:
+        streamlit_module.session_state.pop("spotify_playlist_export_result", None)
+        return
+
+    streamlit_module.subheader("Save to Spotify")
+    track_ids = spotify_playlist_export_service.collect_export_track_ids(
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+        include_buckets=True,
+    )
+    if not track_ids:
+        streamlit_module.warning("No real Spotify track IDs are available to export.")
+        return
+
+    token = auth_manager.get_token(streamlit_module.session_state)
+    if token is None or listening_history_snapshot is None:
+        streamlit_module.warning("Connect Spotify before saving recommendations to a playlist.")
+        return
+
+    if not SpotifyPlaylistExportService.has_playlist_export_scope(token.scope):
+        streamlit_module.warning(
+            "Playlist export requires playlist-modify-private scope. Please update your .env and log in again."
+        )
+        streamlit_module.button(
+            "Save recommendations to Spotify",
+            disabled=True,
+            help=f"Requires the {PLAYLIST_EXPORT_REQUIRED_SCOPE} OAuth scope.",
+        )
+        return
+
+    streamlit_module.caption(
+        f"Exports {len(track_ids)} unique real Spotify tracks from the current balanced and bucket recommendations."
+    )
+    if streamlit_module.button("Save recommendations to Spotify", use_container_width=True):
+        export_result = _export_spotify_recommendations(
+            streamlit_module=streamlit_module,
+            auth_manager=auth_manager,
+            spotify_playlist_export_service=spotify_playlist_export_service,
+            spotify_real_recommendation_result=spotify_real_recommendation_result,
+            listening_history_snapshot=listening_history_snapshot,
+            ui_state=ui_state,
+        )
+        streamlit_module.session_state["spotify_playlist_export_result"] = export_result
+
+    stored_result = streamlit_module.session_state.get("spotify_playlist_export_result")
+    if isinstance(stored_result, SpotifyPlaylistExportResult):
+        _render_spotify_playlist_export_result(streamlit_module, stored_result)
+
+
+def _export_spotify_recommendations(
+    *,
+    streamlit_module: Any,
+    auth_manager: SpotifyAuthManager,
+    spotify_playlist_export_service: SpotifyPlaylistExportService,
+    spotify_real_recommendation_result: SpotifyRealRecommendationResult,
+    listening_history_snapshot: ListeningHistorySnapshot,
+    ui_state: DemoUIState,
+) -> SpotifyPlaylistExportResult:
+    """Refresh the user token and export the current real Spotify tracks."""
+
+    try:
+        token = auth_manager.ensure_valid_token(streamlit_module.session_state)
+    except SpotifyOAuthError:
+        return SpotifyPlaylistExportResult(
+            playlist_id=None,
+            playlist_url=None,
+            track_count=0,
+            success=False,
+            message="Spotify login expired. Please log in again before exporting a playlist.",
+        )
+    if token is None:
+        return SpotifyPlaylistExportResult(
+            playlist_id=None,
+            playlist_url=None,
+            track_count=0,
+            success=False,
+            message="Connect Spotify before saving recommendations to a playlist.",
+        )
+    return spotify_playlist_export_service.export_recommendations(
+        user_token=token.access_token,
+        user_id=listening_history_snapshot.user_id,
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+        mood_label=ui_state.mood_label,
+        exploration_level=ui_state.exploration_level,
+        granted_scopes=token.scope,
+        include_buckets=True,
+    )
+
+
+def _render_spotify_playlist_export_result(
+    streamlit_module: Any,
+    export_result: SpotifyPlaylistExportResult,
+) -> None:
+    """Render the most recent Spotify playlist export result."""
+
+    if export_result.success:
+        streamlit_module.success(export_result.message)
+        if export_result.playlist_url:
+            streamlit_module.markdown(f"[Open playlist on Spotify]({export_result.playlist_url})")
+        return
+    streamlit_module.warning(export_result.message)
 
 
 def _has_spotify_explanation_context(explanation: DemoRecommendationExplanation) -> bool:

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+import requests
+
 from config.settings import ProjectSettings
-from data.spotify_client import SpotifyAPIClient
+from data.spotify_client import SpotifyAPIClient, SpotifyAPIClientError
 
 
 class FakeResponse:
@@ -27,7 +30,7 @@ class FakeResponse:
         """Raise nothing for successful fake responses."""
 
         if self.status_code >= 400:
-            raise RuntimeError("fake http error")
+            raise requests.HTTPError("fake http error")
 
 
 class FakeSession:
@@ -39,12 +42,36 @@ class FakeSession:
         self.post_calls: list[dict[str, Any]] = []
         self.get_calls: list[dict[str, Any]] = []
 
-    def post(self, url: str, data: dict[str, str], auth: tuple[str, str], timeout: int) -> FakeResponse:
-        """Record a fake POST request and return a token payload."""
+    def post(
+        self,
+        url: str,
+        data: dict[str, str] | None = None,
+        auth: tuple[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: int = 30,
+    ) -> FakeResponse:
+        """Record a fake POST request and return a token or playlist payload."""
 
         self.post_calls.append(
-            {"url": url, "data": data, "auth": auth, "timeout": timeout}
+            {
+                "url": url,
+                "data": data,
+                "auth": auth,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
         )
+        if "/users/" in url and url.endswith("/playlists"):
+            return FakeResponse(
+                {
+                    "id": "playlist_123",
+                    "external_urls": {"spotify": "https://open.spotify.com/playlist/playlist_123"},
+                }
+            )
+        if "/playlists/" in url and url.endswith("/tracks"):
+            return FakeResponse({"snapshot_id": "snapshot_123"})
         return FakeResponse({"access_token": "token-123", "expires_in": 3600})
 
     def get(
@@ -139,3 +166,105 @@ def test_spotify_client_supports_authenticated_recent_tracks(tmp_path: Any) -> N
     assert payload["items"][0]["track"]["id"] == "t1"
     assert fake_session.get_calls[0]["headers"]["Authorization"] == "Bearer user-token"
     assert fake_session.post_calls == []
+
+
+def test_spotify_client_create_playlist_posts_expected_payload(tmp_path: Any) -> None:
+    """The Spotify client should create private playlists with a user token."""
+
+    fake_session = FakeSession()
+    client = SpotifyAPIClient.from_settings(build_settings(tmp_path), session=fake_session)
+
+    payload = client.create_playlist(
+        user_token="user-token",
+        user_id="spotify_user",
+        playlist_name="Spotify Discovery Mix",
+        description="Generated playlist",
+        public=False,
+    )
+
+    post_call = fake_session.post_calls[0]
+    assert post_call["url"] == "https://api.spotify.com/v1/users/spotify_user/playlists"
+    assert post_call["json"] == {
+        "name": "Spotify Discovery Mix",
+        "description": "Generated playlist",
+        "public": False,
+    }
+    assert post_call["headers"]["Authorization"] == "Bearer user-token"
+    assert payload["playlist_id"] == "playlist_123"
+    assert payload["playlist_url"] == "https://open.spotify.com/playlist/playlist_123"
+
+
+def test_spotify_client_add_tracks_to_playlist_deduplicates_track_uris(tmp_path: Any) -> None:
+    """The Spotify client should normalize and deduplicate playlist track URIs."""
+
+    fake_session = FakeSession()
+    client = SpotifyAPIClient.from_settings(build_settings(tmp_path), session=fake_session)
+
+    payload = client.add_tracks_to_playlist(
+        user_token="user-token",
+        playlist_id="playlist_123",
+        spotify_track_ids=[
+            "track_1",
+            "spotify:track:track_1",
+            "https://open.spotify.com/track/track_2?si=abc",
+            "track_2",
+        ],
+    )
+
+    post_call = fake_session.post_calls[0]
+    assert post_call["url"] == "https://api.spotify.com/v1/playlists/playlist_123/tracks"
+    assert post_call["json"] == {"uris": ["spotify:track:track_1", "spotify:track:track_2"]}
+    assert payload["added_track_count"] == 2
+    assert payload["snapshot_ids"] == ["snapshot_123"]
+
+
+def test_spotify_client_add_tracks_to_playlist_handles_empty_track_list(tmp_path: Any) -> None:
+    """Empty exports should not call Spotify's add-tracks endpoint."""
+
+    fake_session = FakeSession()
+    client = SpotifyAPIClient.from_settings(build_settings(tmp_path), session=fake_session)
+
+    payload = client.add_tracks_to_playlist(
+        user_token="user-token",
+        playlist_id="playlist_123",
+        spotify_track_ids=[],
+    )
+
+    assert payload["added_track_count"] == 0
+    assert fake_session.post_calls == []
+
+
+def test_spotify_client_playlist_api_failure_raises_controlled_error(tmp_path: Any) -> None:
+    """Spotify write failures should be wrapped in the project client error."""
+
+    class FailingPlaylistSession(FakeSession):
+        def post(
+            self,
+            url: str,
+            data: dict[str, str] | None = None,
+            auth: tuple[str, str] | None = None,
+            json: dict[str, Any] | None = None,
+            headers: dict[str, str] | None = None,
+            timeout: int = 30,
+        ) -> FakeResponse:
+            self.post_calls.append(
+                {
+                    "url": url,
+                    "data": data,
+                    "auth": auth,
+                    "json": json,
+                    "headers": headers,
+                    "timeout": timeout,
+                }
+            )
+            return FakeResponse({"error": "forbidden"}, status_code=403)
+
+    client = SpotifyAPIClient.from_settings(build_settings(tmp_path), session=FailingPlaylistSession())
+
+    with pytest.raises(SpotifyAPIClientError):
+        client.create_playlist(
+            user_token="user-token",
+            user_id="spotify_user",
+            playlist_name="Spotify Discovery Mix",
+            description="Generated playlist",
+        )
