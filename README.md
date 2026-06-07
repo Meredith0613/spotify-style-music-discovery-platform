@@ -52,31 +52,31 @@ This is not a production-scale Spotify deployment. It is a portfolio project tha
 - **Synthetic demo mode**: Built-in demo profiles and catalog keep the project reproducible.
 - **Offline evaluation**: Synthetic and Last.fm-style evaluators report ranking metrics and dataset diagnostics.
 
-## Architecture
+## System Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[Spotify OAuth] --> B[Recent Listening History]
-    B --> C[UserProfileService]
-    C --> D[SpotifyCandidateService]
-    D --> E[Real Spotify Candidate Tracks]
-    E --> F[Content Signals]
-    E --> G[Collaborative Signals]
-    E --> H[ALS Signals]
-    E --> I[Word2Vec-Style Embedding Signals]
-    F --> J[Advanced Hybrid Ranking]
-    G --> J
-    H --> J
-    I --> J
-    J --> K[Mood / Exploration Reranking]
-    K --> L[Explanations]
-    L --> M[Streamlit UI]
+    B --> C[Real Spotify Candidate Generation]
+    C --> D[Content Similarity]
+    C --> E[Implicit Collaborative Filtering]
+    C --> F[ALS Matrix Factorization]
+    C --> G[Word2Vec-style Track Embeddings]
+    D --> H[Advanced Hybrid Ranking]
+    E --> H
+    F --> H
+    G --> H
+    H --> I[Mood / Exploration Reranking]
+    I --> J[Explanation Layer]
+    J --> K[Recommendation Buckets]
+    K --> L[Playlist Export]
 
-    N[Synthetic Demo Profiles] --> O[Demo Catalog]
-    O --> P[Base Hybrid Recommender]
-    P --> Q[Synthetic Fallback UI]
-    Q --> M
+    M[Synthetic Demo Data] --> N[Demo Catalog]
+    N --> O[Hybrid Ranking]
+    O --> J
 ```
+
+The Spotify path uses real listening history to generate real Spotify candidate tracks, then ranks them with content, collaborative, ALS, embedding, mood, novelty, and exploration signals. The synthetic path provides a deterministic fallback for demos without Spotify login. Playlist export is available only for real Spotify tracks when the OAuth token includes the required `playlist-modify-private` scope.
 
 Important modules:
 
@@ -136,12 +136,27 @@ Reports:
 - [`evaluation_report.md`](evaluation_report.md): synthetic evaluation.
 - [`evaluation_report_lastfm.md`](evaluation_report_lastfm.md): Last.fm-style evaluation, coverage, density, and interpretation.
 
+## Evaluation Highlights
+
+![Precision@K comparison](docs/images/evaluation_precision.png)
+
+![NDCG@K comparison](docs/images/evaluation_ndcg.png)
+
 Current benchmark interpretation:
 
 - Content-only currently performs strongest in the reported synthetic and Last.fm benchmark settings.
 - ALS and Word2Vec-style models are implemented and evaluated, but they do not outperform content-only on the current benchmark settings.
-- This is expected: collaborative and embedding models need richer user-item overlap and stronger sequence/co-occurrence structure to shine.
+- This is likely due to dataset sparsity, limited user-item overlap, and the candidate-aware Last.fm benchmark.
+- The advanced hybrid stack remains useful because production-style music discovery typically combines relevance, familiarity, novelty, and exploration signals.
 - Last.fm evaluation uses a practical candidate-aware benchmark, not full exhaustive retrieval over every catalog track.
+
+## Demo Screenshots
+
+Coming soon:
+
+- Spotify login
+- Recommendation buckets
+- Playlist export success
 
 ## How To Run Locally
 
