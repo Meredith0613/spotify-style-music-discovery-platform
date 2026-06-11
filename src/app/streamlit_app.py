@@ -415,7 +415,9 @@ def _render_spotify_candidate_debug_summary(
         return
     streamlit_module.caption(
         "Spotify candidates: "
-        f"{summary.get('candidate_count', summary.get('final_candidate_count', 0))} total | "
+        f"{summary.get('unique_candidate_count', summary.get('candidate_count', summary.get('final_candidate_count', 0)))} unique | "
+        f"{summary.get('duplicate_candidates_removed', 0)} duplicates removed | "
+        f"{summary.get('candidate_artist_count', 0)} artists | "
         f"{summary.get('top_track_candidate_count', summary.get('top_track_candidates_found', 0))} top-track | "
         f"{summary.get('search_candidate_count', summary.get('search_candidates_found', 0))} search | "
         f"{summary.get('skipped_artist_expansion_count', summary.get('top_track_requests_failed', 0))} skipped artist expansions | "
@@ -428,6 +430,14 @@ def _render_spotify_candidate_debug_summary(
         streamlit_module.write(f"Exploration level: {summary.get('exploration_level', 'unknown')}")
         streamlit_module.write(f"Recommendation count: {summary.get('recommendation_count', 'unknown')}")
         streamlit_module.write(f"Ranking focus: {summary.get('ranking_focus', 'Balanced')}")
+        streamlit_module.write(f"Diversity reranking active: {summary.get('diversity_reranking_active', False)}")
+        streamlit_module.write(f"ALS signal used: {summary.get('als_score_available', False)}")
+        streamlit_module.write(f"Embedding signal used: {summary.get('embedding_score_available', False)}")
+        streamlit_module.write(f"Max candidates from one artist: {summary.get('max_candidates_from_single_artist', 0)}")
+        streamlit_module.write(f"Search queries used: {summary.get('search_queries_used', 0)}")
+        source_breakdown = summary.get("candidate_source_breakdown", {}) or {}
+        if source_breakdown:
+            streamlit_module.write(f"Source breakdown: {source_breakdown}")
         before_ids = [str(track_id) for track_id in summary.get("top_candidate_ids_before_reranking", [])]
         after_ids = [str(track_id) for track_id in summary.get("top_candidate_ids_after_reranking", [])]
         streamlit_module.write("Top before controls: " + ", ".join(before_ids))

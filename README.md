@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-red)]()
 [![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954)]()
-[![Tests](https://img.shields.io/badge/tests-110%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-126%20passed-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-v1.0%20portfolio--ready-success)]()
 
 A Spotify-style music discovery platform that combines real Spotify listening history, hybrid recommendation, ALS matrix factorization, Word2Vec-style track embeddings, mood-aware reranking, and explainable recommendations in an interactive Streamlit app.
@@ -43,12 +43,15 @@ This is not a production-scale Spotify deployment. It is a portfolio project tha
 
 - **Spotify login and recent listening history**: PKCE OAuth flow fetches the authenticated user's recent tracks.
 - **Real Spotify candidate generation**: Spotify mode builds real-track candidates from recent artists, artist top tracks, and search.
+- **Diversity-aware reranking**: Spotify mode deduplicates candidate versions, tracks artist concentration, and applies artist/source diversity before final truncation.
+- **Control-sensitive ranking**: Exploration and ranking-focus controls use distinct Familiar, Discovery, Balanced, and Mood-first profiles so filter changes visibly reorder real Spotify recommendations.
+- **Mood Dominance Calibration**: Mood-first and Mood-Based ranking treat mood as a ranking profile, not a small bonus, while Balanced keeps mood influence moderate.
 - **Recommendation buckets**: Spotify mode can show familiar, discovery, and mood-based recommendation sections.
 - **Spotify playlist export**: Real Spotify recommendations can be saved into a private Spotify playlist.
 - **Taste profile visualization**: Spotify mode summarizes recent taste with a cluster label, top artists, top genres, and a 2D taste map.
 - **Streamlit UI**: The app is demoable locally with or without Spotify credentials.
 - **Explainable recommendation chain**: Recommendation cards show rationale, source labels, Spotify links, and album art when available.
-- **Mood-aware playlist generation**: Recommendations can be sequenced into an interpretable mood-aware playlist.
+- **Mood-aware playlist generation**: Recommendations can be sequenced into an interpretable mood-aware playlist, using audio-feature mood profiles when available and metadata keyword fallback when unavailable.
 - **Robust API fallback behavior**: Missing audio features, failed candidate sources, sparse history, or unavailable Spotify login do not crash the app.
 - **Synthetic demo mode**: Built-in demo profiles and catalog keep the project reproducible.
 - **Offline evaluation**: Synthetic and Last.fm-style evaluators report ranking metrics and dataset diagnostics.
@@ -86,6 +89,7 @@ Important modules:
 - `src/auth/spotify_auth.py`: Spotify Authorization Code with PKCE.
 - `src/services/user_profile_service.py`: Recent listening history normalization.
 - `src/services/spotify_candidate_service.py`: Real Spotify candidate generation and bucketed recommendations.
+- `src/services/diversity_reranking_service.py`: Diversity-aware final reranking for Spotify real-track candidates.
 - `src/services/taste_profile_service.py`: Spotify taste profile summaries and 2D taste-map projections.
 - `src/models/content_recommender.py`: Content-based cosine similarity.
 - `src/models/collaborative_recommender.py`: Existing implicit collaborative filtering baseline.
@@ -181,6 +185,12 @@ Synthetic evaluation:
 
 ```bash
 PYTHONPATH=src python -c "from evaluation.offline_evaluator import run_demo_offline_evaluation; result = run_demo_offline_evaluation(k=3, holdout_count=1); print(result.comparison_table.to_string(index=False))"
+```
+
+Synthetic weight tuning:
+
+```bash
+PYTHONPATH=src python -c "from evaluation.weight_tuning import run_demo_weight_tuning; result = run_demo_weight_tuning(k=3, holdout_count=1); print(result.tuning_table.to_string(index=False))"
 ```
 
 Last.fm evaluation:

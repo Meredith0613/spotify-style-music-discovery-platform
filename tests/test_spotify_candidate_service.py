@@ -12,7 +12,12 @@ from data.preprocessor import Preprocessor
 from data.spotify_client import SpotifyAPIClientError
 from app.streamlit_app import _get_spotify_recommendation_buckets, _render_spotify_candidate_debug_summary
 from models.hybrid_recommender import HybridRecommendation, HybridScoreBreakdown
-from services.spotify_candidate_service import RecommendationBucket, SpotifyCandidateService, SpotifyCandidateSet
+from services.spotify_candidate_service import (
+    RecommendationBucket,
+    SpotifyCandidateService,
+    SpotifyCandidateSet,
+    top_k_overlap_percent,
+)
 from services.user_profile_service import ListeningHistorySnapshot, RecentTrackSummary
 
 
@@ -277,7 +282,10 @@ def test_spotify_candidate_service_returns_real_spotify_tracks(tmp_path: Path) -
     assert "Spotify real-track" in result.view_state.explanations[0].recommendation_source
     assert result.candidate_set.debug_summary["candidate_count"] == 3
     assert result.candidate_set.debug_summary["top_track_candidate_count"] == 2
-    assert result.candidate_set.debug_summary["search_candidate_count"] == 1
+    assert result.candidate_set.debug_summary["search_candidate_count"] >= 1
+    assert result.candidate_set.debug_summary["unique_candidate_count"] == 3
+    assert result.candidate_set.debug_summary["duplicate_candidates_removed"] >= 1
+    assert result.candidate_set.debug_summary["candidate_source_breakdown"]["recent artist top track"] == 2
     assert result.candidate_set.debug_summary["ranking_mode"] == "audio-feature-based"
     assert [bucket.bucket_name for bucket in result.recommendation_buckets] == [
         "familiar",
@@ -764,6 +772,619 @@ def test_spotify_candidate_service_debug_summary_tracks_selected_controls(tmp_pa
     assert result.candidate_set.debug_summary["ranking_focus"] == "Discovery"
     assert result.candidate_set.debug_summary["top_candidate_ids_before_reranking"]
     assert result.candidate_set.debug_summary["top_candidate_ids_after_reranking"]
+    assert result.candidate_set.debug_summary["diversity_reranking_active"] is True
+    assert result.candidate_set.debug_summary["advanced_score_used"] is False
+
+
+def test_spotify_candidate_generation_dedupes_by_id_and_name_artist(tmp_path: Path) -> None:
+    """Candidate generation should remove duplicate IDs and normalized title/artist duplicates."""
+
+    class DuplicateCandidateClient(FakeSpotifyCandidateClient):
+        def get_artist_top_tracks(self, artist_id: str, access_token: str, market: str = "US") -> dict[str, Any]:
+            return {
+                "tracks": [
+                    build_track_payload("dup_1", "One Song", "artist_1", "Aurora Lane", 80),
+                    build_track_payload("dup_1", "One Song", "artist_1", "Aurora Lane", 80),
+                ]
+            }
+
+        def search_tracks(self, query: str, access_token: str, limit: int = 10, market: str = "US") -> dict[str, Any]:
+            return {
+                "tracks": {
+                    "items": [
+                        build_track_payload("dup_2", "One Song - Live Version", "artist_1", "Aurora Lane", 55),
+                        build_track_payload("unique_search", "Fresh Search", "artist_2", "Other Artist", 35),
+                    ]
+                }
+            }
+
+        def get_audio_features(self, track_ids: list[str], access_token: str) -> dict[str, Any]:
+            return {"audio_features": []}
+
+    service = build_service(DuplicateCandidateClient(), tmp_path)
+
+    candidate_set = service.build_candidate_set(
+        access_token="token",
+        listening_history_snapshot=build_snapshot(),
+    )
+
+    track_ids = set(candidate_set.track_catalog["track_id"].astype(str))
+    assert "dup_1" in track_ids
+    assert "dup_2" not in track_ids
+    assert "unique_search" in track_ids
+    assert candidate_set.debug_summary["raw_candidate_count"] > candidate_set.debug_summary["unique_candidate_count"]
+    assert candidate_set.debug_summary["duplicate_candidates_removed"] >= 2
+    assert candidate_set.debug_summary["max_candidates_from_single_artist"] >= 1
+    assert "recent track search match" in candidate_set.debug_summary["candidate_source_breakdown"]
+
+
+def test_spotify_candidate_service_optional_advanced_scores_skip_and_change_ranking(tmp_path: Path) -> None:
+    """Optional ALS/embedding maps should no-op when absent and change ranking when supplied."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    recommendations = [
+        build_recommendation("track_a", "Track A", "Artist A"),
+        build_recommendation("track_b", "Track B", "Artist B"),
+    ]
+
+    unchanged = service._apply_optional_advanced_scores(recommendations)
+    changed = service._apply_optional_advanced_scores(
+        recommendations,
+        als_scores={"track_a": 0.1, "track_b": 0.9},
+        embedding_scores={"track_a": 0.1, "track_b": 1.0},
+    )
+
+    assert [recommendation.track_id for recommendation in unchanged] == ["track_a", "track_b"]
+    assert changed[0].track_id == "track_b"
+
+
+def test_spotify_candidate_service_familiar_and_discovery_focus_change_top_results(tmp_path: Path) -> None:
+    """Ranking focus should materially change the top results when the pool allows."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    snapshot = build_snapshot()
+    candidate_catalog = build_control_candidate_catalog()
+    recommendations = [
+        build_recommendation(str(row.track_id), str(row.track_name), str(row.artist_name))
+        for row in candidate_catalog.itertuples(index=False)
+    ]
+
+    familiar_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        candidate_catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="calm",
+        ranking_focus="Familiar",
+    )
+    discovery_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        candidate_catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="calm",
+        ranking_focus="Discovery",
+    )
+
+    familiar_top_4 = [recommendation.track_id for recommendation in familiar_order[:4]]
+    discovery_top_4 = [recommendation.track_id for recommendation in discovery_order[:4]]
+    assert familiar_top_4[0].startswith("familiar")
+    assert not discovery_top_4[0].startswith("familiar")
+    assert len(set(familiar_top_4).intersection(discovery_top_4)) <= 2
+
+
+def test_spotify_candidate_service_audio_mood_profiles_rank_controlled_candidates(tmp_path: Path) -> None:
+    """Audio-feature mood profiles should choose tracks that match the requested mood."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    workout_track = {
+        "track_name": "Fast Run",
+        "artist_name": "Energy Artist",
+        "ranking_mode": "audio-feature-based",
+        "energy": 0.94,
+        "danceability": 0.90,
+        "valence": 0.70,
+        "tempo": 152.0,
+        "acousticness": 0.04,
+        "instrumentalness": 0.0,
+        "catalog_popularity": 0.65,
+    }
+    calm_track = {
+        "track_name": "Quiet Piano Room",
+        "artist_name": "Calm Artist",
+        "ranking_mode": "audio-feature-based",
+        "energy": 0.16,
+        "danceability": 0.20,
+        "valence": 0.42,
+        "tempo": 72.0,
+        "acousticness": 0.92,
+        "instrumentalness": 0.35,
+        "catalog_popularity": 0.35,
+    }
+    happy_track = {
+        "track_name": "Sunshine Smile",
+        "artist_name": "Happy Artist",
+        "ranking_mode": "audio-feature-based",
+        "energy": 0.72,
+        "danceability": 0.76,
+        "valence": 0.96,
+        "tempo": 122.0,
+        "acousticness": 0.16,
+        "instrumentalness": 0.0,
+        "catalog_popularity": 0.62,
+    }
+    melancholic_track = {
+        "track_name": "Lonely Blue Rain",
+        "artist_name": "Melancholic Artist",
+        "ranking_mode": "audio-feature-based",
+        "energy": 0.32,
+        "danceability": 0.20,
+        "valence": 0.10,
+        "tempo": 78.0,
+        "acousticness": 0.84,
+        "instrumentalness": 0.15,
+        "catalog_popularity": 0.42,
+    }
+
+    assert service._compute_mood_alignment(workout_track, "workout") > service._compute_mood_alignment(calm_track, "workout")
+    assert service._compute_mood_alignment(calm_track, "calm") > service._compute_mood_alignment(workout_track, "calm")
+    assert service._compute_mood_alignment(happy_track, "happy") > service._compute_mood_alignment(melancholic_track, "happy")
+    assert service._compute_mood_alignment(melancholic_track, "melancholic") > service._compute_mood_alignment(happy_track, "melancholic")
+
+
+def test_spotify_candidate_service_metadata_mood_fallback_ranks_keywords(tmp_path: Path) -> None:
+    """Metadata-only mood fallback should separate keyword-matched candidates."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    workout_track = {
+        "track_name": "Gym Power Run",
+        "artist_name": "Energy Artist",
+        "artist_genres": "workout pop",
+        "candidate_sources": "recent track search match",
+        "ranking_mode": "metadata-only",
+    }
+    calm_track = {
+        "track_name": "Soft Ambient Sleep",
+        "artist_name": "Quiet Artist",
+        "artist_genres": "ambient acoustic",
+        "candidate_sources": "genre search match",
+        "ranking_mode": "metadata-only",
+    }
+
+    assert service._compute_mood_alignment(workout_track, "workout") > service._compute_mood_alignment(calm_track, "workout")
+    assert service._compute_mood_alignment(calm_track, "study") > service._compute_mood_alignment(workout_track, "study")
+
+
+def test_spotify_candidate_service_repeated_calls_use_latest_controls(tmp_path: Path) -> None:
+    """Repeated ranking calls should not reuse stale mood/exploration debug state."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    snapshot = build_snapshot()
+    candidate_catalog = build_control_candidate_catalog()
+    profile = build_spotify_real_profile(snapshot, mood_label="calm")
+
+    calm_debug: dict[str, object] = {}
+    workout_debug: dict[str, object] = {}
+    calm_results = service._rank_candidates(
+        candidate_catalog=candidate_catalog,
+        listening_history_snapshot=snapshot,
+        profile=profile,
+        exploration_level=0.0,
+        recommendation_count=5,
+        mood_label="calm",
+        ranking_focus="Familiar",
+        debug_summary=calm_debug,
+    )
+    workout_results = service._rank_candidates(
+        candidate_catalog=candidate_catalog,
+        listening_history_snapshot=snapshot,
+        profile=profile,
+        exploration_level=1.0,
+        recommendation_count=5,
+        mood_label="workout",
+        ranking_focus="Discovery",
+        debug_summary=workout_debug,
+    )
+
+    assert calm_debug["selected_filters"] != workout_debug["selected_filters"]
+    assert calm_debug["top_candidate_ids_after_reranking"] != workout_debug["top_candidate_ids_after_reranking"]
+    assert [recommendation.track_id for recommendation in calm_results] != [
+        recommendation.track_id for recommendation in workout_results
+    ]
+
+
+def test_top_k_overlap_percent_measures_ranked_list_overlap() -> None:
+    """Overlap diagnostics should report the shared fraction of two top-k lists."""
+
+    assert top_k_overlap_percent(["a", "b", "c"], ["b", "c", "d"], 3) == 2 / 3
+    assert top_k_overlap_percent([], ["b", "c"], 3) == 0.0
+
+
+def test_mood_first_calm_and_workout_top_10_overlap_is_low(tmp_path: Path) -> None:
+    """Calm and workout mood profiles should produce clearly different top tens."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    catalog = build_mood_diverse_candidate_catalog()
+    recommendations = build_scored_recommendations(catalog)
+    snapshot = build_snapshot()
+
+    calm_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="calm",
+        ranking_focus="Mood-first",
+    )
+    workout_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="workout",
+        ranking_focus="Mood-first",
+    )
+
+    overlap = top_k_overlap_percent(
+        [recommendation.track_id for recommendation in calm_order],
+        [recommendation.track_id for recommendation in workout_order],
+        10,
+    )
+    assert overlap < 0.30
+
+
+def test_mood_first_happy_and_melancholic_top_10_overlap_is_low(tmp_path: Path) -> None:
+    """Happy and melancholic mood profiles should produce clearly different top tens."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    catalog = build_mood_diverse_candidate_catalog()
+    recommendations = build_scored_recommendations(catalog)
+    snapshot = build_snapshot()
+
+    happy_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="happy",
+        ranking_focus="Mood-first",
+    )
+    melancholic_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="melancholic",
+        ranking_focus="Mood-first",
+    )
+
+    overlap = top_k_overlap_percent(
+        [recommendation.track_id for recommendation in happy_order],
+        [recommendation.track_id for recommendation in melancholic_order],
+        10,
+    )
+    assert overlap < 0.30
+
+
+def test_mood_first_changes_more_than_balanced_ranking(tmp_path: Path) -> None:
+    """Mood-first should move farther away from base ranking than balanced mode."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    catalog = build_mood_diverse_candidate_catalog()
+    recommendations = build_scored_recommendations(catalog)
+    snapshot = build_snapshot()
+    base_order = [recommendation.track_id for recommendation in recommendations]
+
+    balanced_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="melancholic",
+        ranking_focus="Balanced",
+    )
+    mood_first_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="melancholic",
+        ranking_focus="Mood-first",
+    )
+
+    balanced_overlap = top_k_overlap_percent(
+        base_order,
+        [recommendation.track_id for recommendation in balanced_order],
+        10,
+    )
+    mood_first_overlap = top_k_overlap_percent(
+        base_order,
+        [recommendation.track_id for recommendation in mood_first_order],
+        10,
+    )
+    assert mood_first_overlap < balanced_overlap
+
+
+def test_mood_profile_ranking_is_deterministic(tmp_path: Path) -> None:
+    """Mood profile ranking should be deterministic for identical inputs."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    catalog = build_mood_diverse_candidate_catalog()
+    recommendations = build_scored_recommendations(catalog)
+    snapshot = build_snapshot()
+
+    first_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="party",
+        ranking_focus="Mood-first",
+    )
+    second_order = service._apply_spotify_ranking_adjustments(
+        recommendations,
+        catalog,
+        snapshot,
+        exploration_level=0.5,
+        mood_label="party",
+        ranking_focus="Mood-first",
+    )
+
+    assert [recommendation.track_id for recommendation in first_order] == [
+        recommendation.track_id for recommendation in second_order
+    ]
+
+
+def test_mood_debug_summary_includes_profile_diagnostics(tmp_path: Path) -> None:
+    """Ranking debug metadata should expose compact mood profile diagnostics."""
+
+    service = build_service(FakeSpotifyCandidateClient(), tmp_path)
+    catalog = build_mood_diverse_candidate_catalog()
+    debug_summary: dict[str, object] = {}
+
+    service._rank_candidates(
+        candidate_catalog=catalog,
+        listening_history_snapshot=build_snapshot(),
+        profile=build_spotify_real_profile(build_snapshot(), mood_label="workout"),
+        exploration_level=0.5,
+        recommendation_count=5,
+        mood_label="workout",
+        ranking_focus="Mood-first",
+        debug_summary=debug_summary,
+    )
+
+    assert debug_summary["mood_profile_used"] == "workout"
+    assert debug_summary["mood_matching_mode"] == "audio_features"
+    assert debug_summary["top_mood_scores_after_reranking"]
+    assert "positive_mood_signals" in debug_summary
+
+
+def build_mood_diverse_candidate_catalog() -> pd.DataFrame:
+    """Build a large enough fixture to test mood-list overlap targets."""
+
+    rows: list[dict[str, object]] = []
+    mood_specs = {
+        "workout": {
+            "name": "Gym Power Run",
+            "genre": "workout dance",
+            "energy": 0.92,
+            "danceability": 0.88,
+            "valence": 0.66,
+            "tempo": 150.0,
+            "acousticness": 0.05,
+            "instrumentalness": 0.0,
+            "popularity": 0.55,
+        },
+        "calm": {
+            "name": "Soft Ambient Piano",
+            "genre": "ambient acoustic",
+            "energy": 0.16,
+            "danceability": 0.18,
+            "valence": 0.45,
+            "tempo": 72.0,
+            "acousticness": 0.92,
+            "instrumentalness": 0.50,
+            "popularity": 0.30,
+        },
+        "happy": {
+            "name": "Sunshine Smile",
+            "genre": "happy pop",
+            "energy": 0.70,
+            "danceability": 0.72,
+            "valence": 0.94,
+            "tempo": 120.0,
+            "acousticness": 0.18,
+            "instrumentalness": 0.0,
+            "popularity": 0.52,
+        },
+        "melancholic": {
+            "name": "Lonely Blue Rain",
+            "genre": "sad acoustic",
+            "energy": 0.34,
+            "danceability": 0.22,
+            "valence": 0.12,
+            "tempo": 78.0,
+            "acousticness": 0.82,
+            "instrumentalness": 0.15,
+            "popularity": 0.38,
+        },
+    }
+    for mood_name, spec in mood_specs.items():
+        for index in range(10):
+            rows.append(
+                {
+                    "track_id": f"{mood_name}_{index}",
+                    "track_name": f"{spec['name']} {index}",
+                    "artist_name": f"{mood_name.title()} Artist {index}",
+                    "primary_artist_name": f"{mood_name.title()} Artist {index}",
+                    "artist_genres": spec["genre"],
+                    "catalog_popularity": float(spec["popularity"]) + (index * 0.005),
+                    "catalog_novelty": 1.0 - float(spec["popularity"]),
+                    "candidate_sources": "recent track search match",
+                    "ranking_mode": "audio-feature-based",
+                    "energy": spec["energy"],
+                    "danceability": spec["danceability"],
+                    "valence": spec["valence"],
+                    "tempo": spec["tempo"],
+                    "acousticness": spec["acousticness"],
+                    "instrumentalness": spec["instrumentalness"],
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def build_scored_recommendations(candidate_catalog: pd.DataFrame) -> list[HybridRecommendation]:
+    """Build base-ranked recommendations that intentionally favor the input order."""
+
+    recommendations: list[HybridRecommendation] = []
+    total = len(candidate_catalog)
+    for index, row in enumerate(candidate_catalog.itertuples(index=False)):
+        score = float(total - index)
+        score_breakdown = HybridScoreBreakdown(
+            collaborative_score=0.0,
+            content_score=score,
+            novelty_score=0.0,
+            popularity_prior=0.0,
+            discovery_score=0.0,
+            final_score=score,
+        )
+        recommendations.append(
+            HybridRecommendation(
+                item_id=str(row.track_id),
+                score=score,
+                source="hybrid",
+                track_name=str(row.track_name),
+                artist_name=str(row.artist_name),
+                score_breakdown=score_breakdown,
+                used_cold_start_fallback=False,
+            )
+        )
+    return recommendations
+
+
+def build_control_candidate_catalog() -> pd.DataFrame:
+    """Build a controlled candidate set with familiar, discovery, workout, and calm tracks."""
+
+    return pd.DataFrame(
+        [
+            {
+                "track_id": "familiar_1",
+                "track_name": "Aurora Hit",
+                "artist_name": "Aurora Lane",
+                "primary_artist_name": "Aurora Lane",
+                "artist_genres": "indie pop",
+                "catalog_popularity": 0.95,
+                "catalog_novelty": 0.05,
+                "candidate_sources": "recent artist top track",
+                "ranking_mode": "audio-feature-based",
+                "energy": 0.62,
+                "danceability": 0.60,
+                "valence": 0.72,
+                "tempo": 118.0,
+                "acousticness": 0.20,
+                "instrumentalness": 0.0,
+            },
+            {
+                "track_id": "familiar_2",
+                "track_name": "Aurora Single",
+                "artist_name": "Aurora Lane",
+                "primary_artist_name": "Aurora Lane",
+                "artist_genres": "indie pop",
+                "catalog_popularity": 0.88,
+                "catalog_novelty": 0.12,
+                "candidate_sources": "recent artist top track",
+                "ranking_mode": "audio-feature-based",
+                "energy": 0.58,
+                "danceability": 0.55,
+                "valence": 0.64,
+                "tempo": 112.0,
+                "acousticness": 0.25,
+                "instrumentalness": 0.0,
+            },
+            {
+                "track_id": "familiar_3",
+                "track_name": "Aurora Fan Favorite",
+                "artist_name": "Aurora Lane",
+                "primary_artist_name": "Aurora Lane",
+                "artist_genres": "indie pop",
+                "catalog_popularity": 0.80,
+                "catalog_novelty": 0.20,
+                "candidate_sources": "recent artist top track",
+                "ranking_mode": "audio-feature-based",
+                "energy": 0.52,
+                "danceability": 0.54,
+                "valence": 0.62,
+                "tempo": 105.0,
+                "acousticness": 0.35,
+                "instrumentalness": 0.0,
+            },
+            {
+                "track_id": "discovery_1",
+                "track_name": "Fresh Search Run",
+                "artist_name": "New Artist",
+                "primary_artist_name": "New Artist",
+                "artist_genres": "dance pop",
+                "catalog_popularity": 0.14,
+                "catalog_novelty": 0.86,
+                "candidate_sources": "recent track search match",
+                "ranking_mode": "audio-feature-based",
+                "energy": 0.92,
+                "danceability": 0.90,
+                "valence": 0.70,
+                "tempo": 150.0,
+                "acousticness": 0.05,
+                "instrumentalness": 0.0,
+            },
+            {
+                "track_id": "discovery_2",
+                "track_name": "Hidden Club Lift",
+                "artist_name": "Other Artist",
+                "primary_artist_name": "Other Artist",
+                "artist_genres": "electronic",
+                "catalog_popularity": 0.18,
+                "catalog_novelty": 0.82,
+                "candidate_sources": "genre search match",
+                "ranking_mode": "audio-feature-based",
+                "energy": 0.88,
+                "danceability": 0.84,
+                "valence": 0.58,
+                "tempo": 142.0,
+                "acousticness": 0.08,
+                "instrumentalness": 0.0,
+            },
+            {
+                "track_id": "calm_1",
+                "track_name": "Quiet Study Piano",
+                "artist_name": "Calm Artist",
+                "primary_artist_name": "Calm Artist",
+                "artist_genres": "ambient acoustic",
+                "catalog_popularity": 0.28,
+                "catalog_novelty": 0.72,
+                "candidate_sources": "genre search match",
+                "ranking_mode": "audio-feature-based",
+                "energy": 0.18,
+                "danceability": 0.18,
+                "valence": 0.42,
+                "tempo": 72.0,
+                "acousticness": 0.90,
+                "instrumentalness": 0.45,
+            },
+        ]
+    )
+
+
+def build_spotify_real_profile(snapshot: ListeningHistorySnapshot, mood_label: str) -> Any:
+    """Build a minimal real Spotify profile for direct ranking tests."""
+
+    from app.demo_data import DemoUserProfile
+
+    return DemoUserProfile(
+        user_id=f"spotify_real::{snapshot.user_id}",
+        display_name="Spotify Real",
+        summary="Test profile",
+        seed_track_ids=snapshot.seed_track_ids,
+        preferred_mood=mood_label,
+    )
 
 
 def build_recommendation(track_id: str, track_name: str, artist_name: str) -> HybridRecommendation:

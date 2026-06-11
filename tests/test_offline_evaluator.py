@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from evaluation.offline_evaluator import OfflineEvaluator, run_demo_offline_evaluation
+from evaluation.weight_tuning import run_demo_weight_tuning
 
 
 def test_offline_evaluator_builds_deterministic_holdout_split() -> None:
@@ -39,3 +40,21 @@ def test_offline_evaluator_returns_model_comparison_table() -> None:
     assert "recall@3" in result.comparison_table.columns
     assert "ndcg@3" in result.comparison_table.columns
     assert result.comparison_table["evaluated_users"].min() > 0
+
+
+def test_weight_tuning_returns_config_table_and_best_configs() -> None:
+    """The weight-tuning helper should summarize existing synthetic evaluation rows."""
+
+    result = run_demo_weight_tuning(k=3, holdout_count=1)
+
+    assert not result.tuning_table.empty
+    assert {
+        "config",
+        "model",
+        "hybrid_weight",
+        "als_weight",
+        "embedding_weight",
+        "diversity_adjusted_objective",
+    }.issubset(result.tuning_table.columns)
+    assert result.best_by_ndcg
+    assert result.best_by_diversity_adjusted_objective
