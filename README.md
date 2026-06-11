@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-red)]()
 [![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954)]()
-[![Tests](https://img.shields.io/badge/tests-104%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-110%20passed-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-v1.0%20portfolio--ready-success)]()
 
 A Spotify-style music discovery platform that combines real Spotify listening history, hybrid recommendation, ALS matrix factorization, Word2Vec-style track embeddings, mood-aware reranking, and explainable recommendations in an interactive Streamlit app.
@@ -45,6 +45,7 @@ This is not a production-scale Spotify deployment. It is a portfolio project tha
 - **Real Spotify candidate generation**: Spotify mode builds real-track candidates from recent artists, artist top tracks, and search.
 - **Recommendation buckets**: Spotify mode can show familiar, discovery, and mood-based recommendation sections.
 - **Spotify playlist export**: Real Spotify recommendations can be saved into a private Spotify playlist.
+- **Taste profile visualization**: Spotify mode summarizes recent taste with a cluster label, top artists, top genres, and a 2D taste map.
 - **Streamlit UI**: The app is demoable locally with or without Spotify credentials.
 - **Explainable recommendation chain**: Recommendation cards show rationale, source labels, Spotify links, and album art when available.
 - **Mood-aware playlist generation**: Recommendations can be sequenced into an interpretable mood-aware playlist.
@@ -69,14 +70,15 @@ flowchart TD
     H --> I[Mood / Exploration Reranking]
     I --> J[Explanation Layer]
     J --> K[Recommendation Buckets]
-    K --> L[Playlist Export]
+    J --> L[Taste Profile Visualization]
+    K --> M[Playlist Export]
 
-    M[Synthetic Demo Data] --> N[Demo Catalog]
-    N --> O[Hybrid Ranking]
-    O --> J
+    N[Synthetic Demo Data] --> O[Demo Catalog]
+    O --> P[Hybrid Ranking]
+    P --> J
 ```
 
-The Spotify path uses real listening history to generate real Spotify candidate tracks, then ranks them with content, collaborative, ALS, embedding, mood, novelty, and exploration signals. The synthetic path provides a deterministic fallback for demos without Spotify login. Playlist export is available only for real Spotify tracks when the OAuth token includes the required `playlist-modify-private` scope.
+The Spotify path uses real listening history to generate real Spotify candidate tracks, then ranks them with content, collaborative, ALS, embedding, mood, novelty, and exploration signals. The synthetic path provides a deterministic fallback for demos without Spotify login. Taste profile visualization summarizes the current Spotify real-track session with dimensionality reduction and clustering. Playlist export is available only for real Spotify tracks when the OAuth token includes the required `playlist-modify-private` scope.
 
 Important modules:
 
@@ -84,6 +86,7 @@ Important modules:
 - `src/auth/spotify_auth.py`: Spotify Authorization Code with PKCE.
 - `src/services/user_profile_service.py`: Recent listening history normalization.
 - `src/services/spotify_candidate_service.py`: Real Spotify candidate generation and bucketed recommendations.
+- `src/services/taste_profile_service.py`: Spotify taste profile summaries and 2D taste-map projections.
 - `src/models/content_recommender.py`: Content-based cosine similarity.
 - `src/models/collaborative_recommender.py`: Existing implicit collaborative filtering baseline.
 - `src/models/als_recommender.py`: Lightweight implicit-feedback ALS.
@@ -262,6 +265,14 @@ Spotify Playlist Export is implemented for real Spotify recommendation mode:
 - Users can save real Spotify recommendations into a private Spotify playlist.
 - The playlist description includes mood, exploration level, generation timestamp, and source metadata.
 - Bucket recommendations can be exported with duplicates removed before tracks are added.
+
+### v1.4 progress — Taste Profile Visualization
+
+Taste Profile Visualization is implemented for Spotify real-track mode:
+
+- Uses dimensionality reduction and clustering to summarize recent listening taste.
+- Shows a cluster label, top artists, top genres when available, and a compact 2D taste map.
+- Falls back safely when UMAP or richer metadata is unavailable.
 
 ## Roadmap
 

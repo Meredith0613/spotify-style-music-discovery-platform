@@ -36,6 +36,7 @@ from services.spotify_playlist_export_service import (
     SpotifyPlaylistExportService,
 )
 from services.spotify_reranking_service import SpotifyRerankingResult, SpotifyRerankingService
+from services.taste_profile_service import TasteProfileService, TasteProfileSummary
 from services.user_profile_service import ListeningHistorySnapshot, UserProfileService
 
 
@@ -70,6 +71,7 @@ def run_app() -> None:
     spotify_playlist_export_service = _get_spotify_playlist_export_service(st, settings)
     spotify_explanation_service = _get_spotify_explanation_service(st)
     spotify_reranking_service = _get_spotify_reranking_service(st)
+    taste_profile_service = _get_taste_profile_service(st)
 
     callback_in_progress = _has_auth_callback_params(st)
     callback_processed = bool(st.session_state.get("spotify_callback_processed"))
@@ -198,6 +200,12 @@ def run_app() -> None:
         ui_state=ui_state,
         spotify_recommendation_context=spotify_recommendation_context,
         spotify_reranking_result=spotify_reranking_result,
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+    )
+    _render_taste_profile_section(
+        st,
+        taste_profile_service=taste_profile_service,
+        listening_history_snapshot=listening_history_snapshot,
         spotify_real_recommendation_result=spotify_real_recommendation_result,
     )
     _render_hybrid_weights(st, view_state)
@@ -509,6 +517,18 @@ def _get_spotify_playlist_export_service(
         """Build the playlist export service once per Streamlit session."""
 
         return SpotifyPlaylistExportService.from_settings(settings)
+
+    return load_service()
+
+
+def _get_taste_profile_service(streamlit_module: Any) -> TasteProfileService:
+    """Return a cached service for taste profile visualization."""
+
+    @streamlit_module.cache_resource(show_spinner=False)
+    def load_service() -> TasteProfileService:
+        """Build the taste profile service once per Streamlit session."""
+
+        return TasteProfileService()
 
     return load_service()
 
@@ -1035,6 +1055,93 @@ def _render_hybrid_weights(streamlit_module: Any, view_state: DemoViewState) -> 
     weight_columns = streamlit_module.columns(5)
     for column, (weight_name, weight_value) in zip(weight_columns, view_state.hybrid_weights.items()):
         column.metric(weight_name.replace("_", " ").title(), f"{weight_value:.2f}")
+
+
+def _render_taste_profile_section(
+    streamlit_module: Any,
+    *,
+    taste_profile_service: TasteProfileService,
+    listening_history_snapshot: ListeningHistorySnapshot | None,
+    spotify_real_recommendation_result: SpotifyRealRecommendationResult | None,
+) -> None:
+    """Render the Spotify real-track taste profile section."""
+
+    if listening_history_snapshot is None or spotify_real_recommendation_result is None:
+        return
+
+    summary = taste_profile_service.build_taste_profile(
+        listening_history_snapshot=listening_history_snapshot,
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+    )
+    _render_taste_profile_summary(streamlit_module, summary)
+
+
+def _render_taste_profile_summary(
+    streamlit_module: Any,
+    summary: TasteProfileSummary,
+) -> None:
+    """Render a taste profile summary in a Streamlit-compatible way."""
+
+    streamlit_module.subheader("Your Taste Profile")
+    if summary.warning:
+        streamlit_module.info(summary.warning)
+
+    summary_columns = streamlit_module.columns(3)
+    summary_columns[0].metric("Cluster", summary.cluster_label)
+    with summary_columns[1]:
+        streamlit_module.markdown("**Top Artists**")
+        if summary.top_artists:
+            for artist_name in summary.top_artists[:5]:
+                streamlit_module.write(f"- {artist_name}")
+        else:
+            streamlit_module.caption("Not enough artist metadata yet.")
+    with summary_columns[2]:
+        streamlit_module.markdown("**Top Genres**")
+        if summary.top_genres:
+            for genre_name in summary.top_genres[:5]:
+                streamlit_module.write(f"- {genre_name}")
+        else:
+            streamlit_module.caption("Genre metadata is sparse for this session.")
+
+    streamlit_module.caption(summary.explanation)
+    if not summary.plot_points:
+        return
+
+    plot_frame = pd.DataFrame(
+        [
+            {
+                "x": point.x,
+                "y": point.y,
+                "cluster": f"Cluster {point.cluster_id}",
+                "track": point.track_name,
+                "artist": point.artist_name,
+                "source": "Recent listening" if point.is_recent else "Candidate",
+                "point_size": 80 if point.is_recent else 35,
+            }
+            for point in summary.plot_points
+        ]
+    )
+    if hasattr(streamlit_module, "scatter_chart"):
+        try:
+            streamlit_module.scatter_chart(
+                plot_frame,
+                x="x",
+                y="y",
+                color="cluster",
+                size="point_size",
+                use_container_width=True,
+            )
+            return
+        except TypeError:
+            streamlit_module.scatter_chart(
+                plot_frame,
+                x="x",
+                y="y",
+                color="cluster",
+                use_container_width=True,
+            )
+            return
+    streamlit_module.dataframe(plot_frame, use_container_width=True)
 
 
 def _render_recommendation_section(
