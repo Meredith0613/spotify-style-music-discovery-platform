@@ -62,7 +62,11 @@ class TasteProfileService:
             listening_history_snapshot=listening_history_snapshot,
             spotify_real_recommendation_result=spotify_real_recommendation_result,
         )
-        top_artists = self._extract_top_artists(profile_frame)
+        top_artists = (
+            self._extract_top_artists_from_recent_tracks(listening_history_snapshot.recent_tracks)
+            or self._extract_top_artists_from_spotify_result(spotify_real_recommendation_result)
+            or self._extract_top_artists(profile_frame)
+        )
         top_genres = self._extract_top_genres(profile_frame)
         base_explanation = (
             "Your taste profile is estimated from recent Spotify listening and candidate tracks "
@@ -138,8 +142,14 @@ class TasteProfileService:
         profile_frame = profile_frame.drop_duplicates(subset=["track_id"], keep="first").reset_index(drop=True)
         if "track_name" not in profile_frame.columns:
             profile_frame["track_name"] = profile_frame["track_id"]
-        if "artist_name" not in profile_frame.columns:
-            profile_frame["artist_name"] = profile_frame.get("primary_artist_name", "")
+        artist_name_series = profile_frame.get("artist_name", pd.Series("", index=profile_frame.index))
+        primary_artist_series = profile_frame.get("primary_artist_name", pd.Series("", index=profile_frame.index))
+        artist_names_series = profile_frame.get("artist_names", pd.Series("", index=profile_frame.index))
+        profile_frame["artist_name"] = artist_name_series.fillna("").astype(str)
+        missing_artist_names = profile_frame["artist_name"].str.strip().eq("")
+        profile_frame.loc[missing_artist_names, "artist_name"] = primary_artist_series.fillna("").astype(str)
+        missing_artist_names = profile_frame["artist_name"].str.strip().eq("")
+        profile_frame.loc[missing_artist_names, "artist_name"] = artist_names_series.fillna("").astype(str)
         if "artist_genres" not in profile_frame.columns:
             profile_frame["artist_genres"] = ""
         return profile_frame
@@ -300,13 +310,52 @@ class TasteProfileService:
         source_frame = profile_frame.loc[profile_frame.get("is_recent", False) == True]  # noqa: E712
         if source_frame.empty:
             source_frame = profile_frame
-        artist_values = source_frame.get("artist_name", source_frame.get("primary_artist_name", pd.Series(dtype=str)))
         counter: Counter[str] = Counter()
-        for raw_value in artist_values.fillna("").astype(str):
+        for row in source_frame.itertuples(index=False):
+            raw_value = str(
+                getattr(row, "artist_name", "")
+                or getattr(row, "primary_artist_name", "")
+                or getattr(row, "artist_names", "")
+            )
             for artist_name in raw_value.split(","):
                 normalized = artist_name.strip()
                 if normalized:
                     counter[normalized] += 1
+        return [artist_name for artist_name, _ in counter.most_common(limit)]
+
+    def _extract_top_artists_from_recent_tracks(
+        self,
+        recent_tracks: list[object],
+        limit: int = 5,
+    ) -> list[str]:
+        """Return artists directly from Spotify recent-play summaries when available."""
+
+        counter: Counter[str] = Counter()
+        for track in recent_tracks:
+            for artist_name in str(getattr(track, "artist_name", "")).split(","):
+                normalized_artist = artist_name.strip()
+                if normalized_artist:
+                    counter[normalized_artist] += 1
+        return [artist_name for artist_name, _ in counter.most_common(limit)]
+
+    def _extract_top_artists_from_spotify_result(
+        self,
+        spotify_real_recommendation_result: SpotifyRealRecommendationResult,
+        limit: int = 5,
+    ) -> list[str]:
+        """Fall back to real Spotify candidate and recommendation artist labels."""
+
+        counter: Counter[str] = Counter()
+        candidates = spotify_real_recommendation_result.candidate_set.candidates
+        for candidate in candidates:
+            artist_name = str(candidate.artist_name).strip()
+            if artist_name:
+                counter[artist_name] += 1
+        if not counter:
+            for recommendation in spotify_real_recommendation_result.view_state.recommendations:
+                artist_name = str(recommendation.artist_name).strip()
+                if artist_name:
+                    counter[artist_name] += 1
         return [artist_name for artist_name, _ in counter.most_common(limit)]
 
     def _extract_top_genres(self, profile_frame: pd.DataFrame, limit: int = 5) -> list[str]:

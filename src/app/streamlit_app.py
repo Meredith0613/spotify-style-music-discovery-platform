@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 import sys
 from typing import Any
@@ -51,6 +52,17 @@ class DemoUIState:
     ranking_focus: str
     playlist_length: int
     show_taste_clusters: bool
+
+
+@dataclass(slots=True)
+class MusicPersonalityMetrics:
+    """Store compact display metrics for the Spotify real-track personality panel."""
+
+    top_artist: str
+    top_genre: str
+    favorite_era: str
+    energy_score: str
+    discovery_score: str
 
 
 def run_app() -> None:
@@ -193,22 +205,12 @@ def run_app() -> None:
         history_error=history_error,
     )
 
-    _render_recent_history_status(st, listening_history_snapshot, history_error)
-    _render_profile_summary(
-        st,
-        view_state=view_state,
-        ui_state=ui_state,
-        spotify_recommendation_context=spotify_recommendation_context,
-        spotify_reranking_result=spotify_reranking_result,
-        spotify_real_recommendation_result=spotify_real_recommendation_result,
-    )
     _render_taste_profile_section(
         st,
         taste_profile_service=taste_profile_service,
         listening_history_snapshot=listening_history_snapshot,
         spotify_real_recommendation_result=spotify_real_recommendation_result,
     )
-    _render_hybrid_weights(st, view_state)
     _render_recommendation_section(
         st,
         view_state=view_state,
@@ -224,8 +226,22 @@ def run_app() -> None:
         listening_history_snapshot=listening_history_snapshot,
         ui_state=ui_state,
     )
-    _render_playlist_section(st, view_state)
-    if ui_state.show_taste_clusters:
+    with st.expander("Playlist sequencing details", expanded=False):
+        _render_playlist_section(st, view_state)
+    with st.expander("Session details", expanded=False):
+        _render_recent_history_status(st, listening_history_snapshot, history_error)
+        _render_profile_summary(
+            st,
+            view_state=view_state,
+            ui_state=ui_state,
+            spotify_recommendation_context=spotify_recommendation_context,
+            spotify_reranking_result=spotify_reranking_result,
+            spotify_real_recommendation_result=spotify_real_recommendation_result,
+        )
+        _render_hybrid_weights(st, view_state)
+    if spotify_real_recommendation_result is not None:
+        _render_spotify_candidate_debug_summary(st, spotify_real_recommendation_result)
+    elif ui_state.show_taste_clusters:
         _render_taste_cluster_section(st, view_state)
 
 
@@ -239,16 +255,16 @@ def _inject_demo_styles(streamlit_module: Any) -> None:
             padding-top: 2rem;
             padding-bottom: 2.5rem;
         }
-        .demo-hero, .demo-card {
+        .demo-hero {
             border: 1px solid rgba(15, 23, 42, 0.08);
-            border-radius: 18px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.96));
+            border-radius: 8px;
+            background: #ffffff;
             padding: 1rem 1.1rem;
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
         }
         .demo-hero {
             margin-bottom: 1rem;
-            background: linear-gradient(135deg, rgba(240,249,255,0.95), rgba(248,250,252,0.98));
+            border-left: 4px solid #1db954;
         }
         .demo-kicker {
             text-transform: uppercase;
@@ -284,25 +300,101 @@ def _inject_demo_styles(streamlit_module: Any) -> None:
         .demo-badge.mood { background: #fef3c7; color: #92400e; }
         .demo-badge.explore { background: #ede9fe; color: #6d28d9; }
         .demo-badge.rerank { background: #fee2e2; color: #991b1b; }
-        .demo-card-title {
-            font-size: 1.05rem;
+        .demo-badge.familiar { background: #dbeafe; color: #1e40af; }
+        .demo-badge.discovery { background: #fef3c7; color: #92400e; }
+        .demo-badge.mood-based { background: #fce7f3; color: #9d174d; }
+        .recommendation-card {
+            display: flex;
+            gap: 0.75rem;
+            min-height: 124px;
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+            border: 1px solid #2d383d;
+            border-radius: 8px;
+            background: #172026;
+            color: #f8fafc;
+        }
+        .recommendation-thumb, .recommendation-thumb-placeholder {
+            width: 60px;
+            height: 60px;
+            flex: 0 0 60px;
+            border-radius: 6px;
+            object-fit: cover;
+            background: #2d383d;
+        }
+        .recommendation-thumb-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #b9c7c9;
+            font-size: 0.72rem;
+        }
+        .recommendation-content { min-width: 0; flex: 1; }
+        .recommendation-title {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.98rem;
             font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 0.2rem;
+            color: #ffffff;
+            margin-bottom: 0.1rem;
         }
-        .demo-card-subtitle {
-            color: #475569;
-            margin-bottom: 0.6rem;
+        .recommendation-artist {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: #b9c7c9;
+            font-size: 0.86rem;
+            margin-bottom: 0.3rem;
         }
-        .demo-card-meta {
-            color: #0f172a;
-            font-weight: 600;
-            margin-bottom: 0.55rem;
+        .recommendation-card .demo-badge {
+            margin-bottom: 0.25rem;
         }
-        .demo-card-copy {
-            color: #334155;
-            font-size: 0.92rem;
-            line-height: 1.45;
+        .recommendation-reason {
+            color: #d7e0e2;
+            font-size: 0.82rem;
+            line-height: 1.3;
+            margin-top: 0.2rem;
+        }
+        .recommendation-link {
+            display: inline-block;
+            margin-top: 0.35rem;
+            color: #62d98b;
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .personality-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.55rem 1rem;
+            margin: 0.5rem 0 0.75rem;
+        }
+        .personality-cluster {
+            grid-column: 1 / -1;
+            border-left: 3px solid #1db954;
+            padding: 0.4rem 0.65rem;
+            background: #172b20;
+        }
+        .personality-item {
+            min-width: 0;
+            padding: 0.15rem 0;
+        }
+        .personality-label {
+            color: #a8bac8;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .personality-value {
+            color: #f8fafc;
+            font-size: 1rem;
+            font-weight: 700;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }
+        @media (max-width: 760px) {
+            .personality-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         .demo-section-caption {
             color: #64748b;
@@ -373,7 +465,6 @@ def _render_demo_header(
             spotify_real_recommendation_result.candidate_set.warnings
         ):
             streamlit_module.info(warning_message)
-        _render_spotify_candidate_debug_summary(streamlit_module, spotify_real_recommendation_result)
     elif spotify_recommendation_context is not None:
         streamlit_module.success("Spotify listening is personalizing this session through the demo catalog fallback.")
     elif history_error:
@@ -770,7 +861,7 @@ def _render_auth_sidebar_section(
     """Render the narrow Spotify auth controls without changing the demo flow."""
 
     sidebar = streamlit_module.sidebar
-    sidebar.header("Spotify Login")
+    sidebar.header("Spotify")
 
     if not settings.spotify_oauth_available():
         sidebar.caption("Spotify personalization: unavailable")
@@ -779,11 +870,9 @@ def _render_auth_sidebar_section(
         )
         return
 
-    sidebar.caption("Spotify personalization: available")
-
     token = auth_manager.get_token(streamlit_module.session_state)
     if token is None:
-        sidebar.info("Connect Spotify to personalize recommendations.")
+        sidebar.caption("Connect recent listening to personalize real Spotify recommendations.")
         callback_processed = bool(streamlit_module.session_state.get("spotify_callback_processed"))
 
         if callback_processed and not _has_auth_callback_params(streamlit_module):
@@ -791,32 +880,43 @@ def _render_auth_sidebar_section(
             streamlit_module.session_state.pop("spotify_login_url", None)
             callback_processed = False
 
-        # The login URL must only be generated on an explicit click so the
-        # original PKCE state and verifier survive Streamlit reruns.
-        if not callback_in_progress and sidebar.button("Login with Spotify", use_container_width=True):
-            streamlit_module.session_state.pop("spotify_callback_processed", None)
-            streamlit_module.session_state["spotify_login_url"] = auth_manager.get_authorization_url(
-                streamlit_module.session_state
-            )
-
         login_url = str(
             streamlit_module.session_state.get("spotify_login_url")
             or streamlit_module.session_state.get("spotify_auth_login_url", "")
         ).strip()
+        if not login_url and not callback_in_progress:
+            # Keep the PKCE verifier in session state before the one-click redirect.
+            login_url = auth_manager.get_authorization_url(streamlit_module.session_state)
+            streamlit_module.session_state["spotify_login_url"] = login_url
         if callback_in_progress and not callback_processed:
             sidebar.caption("Finishing Spotify login...")
-        if login_url:
-            sidebar.markdown(f"[Click to login]({login_url})")
+        elif login_url:
+            sidebar.link_button("Connect Spotify", login_url, use_container_width=True)
         return
 
-    sidebar.success("Spotify connected")
+    connected_name = "Spotify listener"
     if listening_history_snapshot is not None:
-        sidebar.caption(
-            f"Recent listening loaded for {listening_history_snapshot.display_name}."
+        connected_name = listening_history_snapshot.display_name or connected_name
+        recent_artist_count = len(
+            {
+                artist_name.strip()
+                for track in listening_history_snapshot.recent_tracks
+                for artist_name in str(track.artist_name).split(",")
+                if artist_name.strip()
+            }
         )
+        sidebar.success(f"Connected as {connected_name}")
+        sidebar.caption(
+            f"Recent artists: {recent_artist_count} | Recent tracks: {listening_history_snapshot.recent_track_count}"
+        )
+        if sidebar.button("Refresh Listening History", use_container_width=True):
+            _clear_listening_history_cache(streamlit_module.session_state)
+            streamlit_module.rerun()
     elif history_error:
+        sidebar.success("Spotify connected")
         sidebar.warning("Connected, but recent listening could not be loaded.")
     else:
+        sidebar.success("Spotify connected")
         sidebar.caption("Loading recent listening...")
 
     if sidebar.button("Log out of Spotify", use_container_width=True):
@@ -1083,35 +1183,73 @@ def _render_taste_profile_section(
         listening_history_snapshot=listening_history_snapshot,
         spotify_real_recommendation_result=spotify_real_recommendation_result,
     )
-    _render_taste_profile_summary(streamlit_module, summary)
+    personality_metrics = _build_music_personality_metrics(
+        summary=summary,
+        listening_history_snapshot=listening_history_snapshot,
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+    )
+    _render_taste_profile_summary(streamlit_module, summary, personality_metrics)
 
 
 def _render_taste_profile_summary(
     streamlit_module: Any,
     summary: TasteProfileSummary,
+    personality_metrics: MusicPersonalityMetrics | None = None,
 ) -> None:
     """Render a taste profile summary in a Streamlit-compatible way."""
 
-    streamlit_module.subheader("Your Taste Profile")
+    metrics = personality_metrics or MusicPersonalityMetrics(
+        top_artist=summary.top_artists[0] if summary.top_artists else "No data yet",
+        top_genre=summary.top_genres[0] if summary.top_genres else "Spotify genre unavailable",
+        favorite_era="No year data yet",
+        energy_score="Unavailable",
+        discovery_score="Unavailable",
+    )
+    streamlit_module.subheader("Your Music Personality")
     if summary.warning:
-        streamlit_module.info(summary.warning)
+        streamlit_module.info(
+            "Keep listening to build a more detailed taste map. "
+            "The available listening signals are still shown below."
+        )
 
-    summary_columns = streamlit_module.columns(3)
-    summary_columns[0].metric("Cluster", summary.cluster_label)
-    with summary_columns[1]:
-        streamlit_module.markdown("**Top Artists**")
-        if summary.top_artists:
-            for artist_name in summary.top_artists[:5]:
-                streamlit_module.write(f"- {artist_name}")
-        else:
-            streamlit_module.caption("Not enough artist metadata yet.")
-    with summary_columns[2]:
-        streamlit_module.markdown("**Top Genres**")
-        if summary.top_genres:
-            for genre_name in summary.top_genres[:5]:
-                streamlit_module.write(f"- {genre_name}")
-        else:
-            streamlit_module.caption("Genre metadata is sparse for this session.")
+    streamlit_module.markdown(
+        """
+        <div class="personality-grid">
+          <div class="personality-cluster">
+            <div class="personality-label">Taste Cluster</div>
+            <div class="personality-value">{cluster_label}</div>
+          </div>
+          <div class="personality-item">
+            <div class="personality-label">Top Artist</div>
+            <div class="personality-value">{top_artist}</div>
+          </div>
+          <div class="personality-item">
+            <div class="personality-label">Top Genre</div>
+            <div class="personality-value">{top_genre}</div>
+          </div>
+          <div class="personality-item">
+            <div class="personality-label">Favorite Era</div>
+            <div class="personality-value">{favorite_era}</div>
+          </div>
+          <div class="personality-item">
+            <div class="personality-label">Energy Score</div>
+            <div class="personality-value">{energy_score}</div>
+          </div>
+          <div class="personality-item">
+            <div class="personality-label">Discovery Score</div>
+            <div class="personality-value">{discovery_score}</div>
+          </div>
+        </div>
+        """.format(
+            cluster_label=escape(summary.cluster_label),
+            top_artist=escape(metrics.top_artist),
+            top_genre=escape(metrics.top_genre),
+            favorite_era=escape(metrics.favorite_era),
+            energy_score=escape(metrics.energy_score),
+            discovery_score=escape(metrics.discovery_score),
+        ),
+        unsafe_allow_html=True,
+    )
 
     streamlit_module.caption(summary.explanation)
     if not summary.plot_points:
@@ -1152,6 +1290,77 @@ def _render_taste_profile_summary(
             )
             return
     streamlit_module.dataframe(plot_frame, use_container_width=True)
+
+
+def _build_music_personality_metrics(
+    *,
+    summary: TasteProfileSummary,
+    listening_history_snapshot: ListeningHistorySnapshot,
+    spotify_real_recommendation_result: SpotifyRealRecommendationResult,
+) -> MusicPersonalityMetrics:
+    """Derive compact personality metrics from already loaded Spotify session data."""
+
+    frames = [
+        listening_history_snapshot.track_level_frame,
+        spotify_real_recommendation_result.candidate_set.track_catalog,
+    ]
+    profile_frame = pd.concat([frame for frame in frames if not frame.empty], ignore_index=True, sort=False)
+    top_artist = summary.top_artists[0] if summary.top_artists else "No data yet"
+    top_genre = summary.top_genres[0] if summary.top_genres else "Spotify genre unavailable"
+    favorite_era = _derive_favorite_era(profile_frame)
+    energy_score = _format_average_score(profile_frame, "energy")
+    discovery_score = _derive_discovery_score(profile_frame)
+    return MusicPersonalityMetrics(
+        top_artist=top_artist,
+        top_genre=top_genre,
+        favorite_era=favorite_era,
+        energy_score=energy_score,
+        discovery_score=discovery_score,
+    )
+
+
+def _derive_favorite_era(profile_frame: pd.DataFrame) -> str:
+    """Return the most common release decade when release metadata is present."""
+
+    if profile_frame.empty:
+        return "No year data yet"
+    for column_name in ["album_release_date", "release_date", "release_year"]:
+        if column_name not in profile_frame.columns:
+            continue
+        years = pd.to_numeric(
+            profile_frame[column_name].astype(str).str.extract(r"(\d{4})", expand=False),
+            errors="coerce",
+        ).dropna()
+        if not years.empty:
+            decades = ((years.astype(int) // 10) * 10).astype(str) + "s"
+            return str(decades.value_counts().index[0])
+    return "No year data yet"
+
+
+def _format_average_score(profile_frame: pd.DataFrame, column_name: str) -> str:
+    """Format a normalized feature average as a compact 0-100 score."""
+
+    if profile_frame.empty or column_name not in profile_frame.columns:
+        return "Unavailable"
+    values = pd.to_numeric(profile_frame[column_name], errors="coerce").dropna()
+    if values.empty:
+        return "Unavailable"
+    return f"{int(round(float(values.mean()) * 100))}/100"
+
+
+def _derive_discovery_score(profile_frame: pd.DataFrame) -> str:
+    """Estimate discovery from existing novelty or candidate-source signals."""
+
+    if profile_frame.empty:
+        return "Unavailable"
+    if "catalog_novelty" in profile_frame.columns:
+        return _format_average_score(profile_frame, "catalog_novelty")
+    if "candidate_sources" in profile_frame.columns:
+        source_text = profile_frame["candidate_sources"].fillna("").astype(str).str.lower()
+        if len(source_text):
+            search_share = float(source_text.str.contains("search").mean())
+            return f"{int(round(search_share * 100))}/100"
+    return "Unavailable"
 
 
 def _render_recommendation_section(
@@ -1213,36 +1422,12 @@ def _render_spotify_bucket_sections(
         bucket_columns = streamlit_module.columns(2)
         for index, explanation in enumerate(explanations):
             card_column = bucket_columns[index % len(bucket_columns)]
-            badges = _build_badge_html(bucket_label, "spotify")
-            image_html = ""
-            link_html = ""
-            if explanation.album_image_url:
-                image_html = (
-                    '<img src="{image_url}" alt="" style="width:64px;height:64px;'
-                    'object-fit:cover;border-radius:6px;margin-bottom:0.5rem;" />'
-                ).format(image_url=explanation.album_image_url)
-            if explanation.spotify_url:
-                link_html = '<div class="demo-card-meta"><a href="{url}" target="_blank">Open in Spotify</a></div>'.format(
-                    url=explanation.spotify_url
-                )
             with card_column:
                 streamlit_module.markdown(
-                    """
-                    <div class="demo-card">
-                      {image_html}
-                      <div class="demo-card-title">{track_name}</div>
-                      <div class="demo-card-subtitle">{artist_name}</div>
-                      <div>{badges}</div>
-                      {link_html}
-                      <div class="demo-card-copy">{rationale}</div>
-                    </div>
-                    """.format(
-                        image_html=image_html,
-                        track_name=explanation.track_name,
-                        artist_name=explanation.artist_name,
-                        badges=badges,
-                        link_html=link_html,
-                        rationale=_build_recommendation_card_rationale(explanation),
+                    _build_recommendation_card_html(
+                        explanation=explanation,
+                        bucket_label=bucket_label,
+                        mood_label=explanation.spotify_inferred_mood or "calm",
                     ),
                     unsafe_allow_html=True,
                 )
@@ -1313,36 +1498,15 @@ def _render_recommendation_cards(
             )
 
         with card_column:
-            image_html = ""
-            link_html = ""
-            if explanation is not None and explanation.album_image_url:
-                image_html = (
-                    '<img src="{image_url}" alt="" style="width:64px;height:64px;'
-                    'object-fit:cover;border-radius:6px;margin-bottom:0.5rem;" />'
-                ).format(image_url=explanation.album_image_url)
-            if explanation is not None and explanation.spotify_url:
-                link_html = '<div class="demo-card-meta"><a href="{url}" target="_blank">Open in Spotify</a></div>'.format(
-                    url=explanation.spotify_url
-                )
             streamlit_module.markdown(
-                """
-                <div class="demo-card">
-                  {image_html}
-                  <div class="demo-card-title">{rank}. {track_name}</div>
-                  <div class="demo-card-subtitle">{artist_name}</div>
-                  <div>{badges}</div>
-                  <div class="demo-card-meta">{score_line}</div>
-                  {link_html}
-                  <div class="demo-card-copy">{rationale}</div>
-                </div>
-                """.format(
-                    image_html=image_html,
+                _build_recommendation_card_html(
+                    explanation=explanation,
+                    bucket_label="Recommended",
+                    mood_label=view_state.playlist.mood,
                     rank=index + 1,
-                    track_name=recommendation.track_name,
-                    artist_name=recommendation.artist_name,
-                    badges="".join(badges),
-                    score_line=score_line,
-                    link_html=link_html,
+                    fallback_track_name=recommendation.track_name,
+                    fallback_artist_name=recommendation.artist_name,
+                    extra_badges="".join(badges),
                     rationale=rationale,
                 ),
                 unsafe_allow_html=True,
@@ -1402,7 +1566,7 @@ def _render_spotify_playlist_export_section(
         streamlit_module.session_state.pop("spotify_playlist_export_result", None)
         return
 
-    streamlit_module.subheader("Save to Spotify")
+    streamlit_module.subheader("Playlist Preview")
     track_ids = spotify_playlist_export_service.collect_export_track_ids(
         spotify_real_recommendation_result=spotify_real_recommendation_result,
         include_buckets=True,
@@ -1427,9 +1591,17 @@ def _render_spotify_playlist_export_section(
         )
         return
 
-    streamlit_module.caption(
-        f"Exports {len(track_ids)} unique real Spotify tracks from the current balanced and bucket recommendations."
+    preview = _build_playlist_preview_metadata(
+        spotify_real_recommendation_result=spotify_real_recommendation_result,
+        track_ids=track_ids,
+        ui_state=ui_state,
     )
+    preview_columns = streamlit_module.columns(4)
+    preview_columns[0].metric("Mood", preview["mood"])
+    preview_columns[1].metric("Exploration", preview["exploration"])
+    preview_columns[2].metric("Tracks", preview["track_count"])
+    preview_columns[3].metric("Estimated duration", preview["duration"])
+    streamlit_module.caption(f"Buckets included: {preview['buckets']}")
     if streamlit_module.button("Save recommendations to Spotify", use_container_width=True):
         export_result = _export_spotify_recommendations(
             streamlit_module=streamlit_module,
@@ -1444,6 +1616,37 @@ def _render_spotify_playlist_export_section(
     stored_result = streamlit_module.session_state.get("spotify_playlist_export_result")
     if isinstance(stored_result, SpotifyPlaylistExportResult):
         _render_spotify_playlist_export_result(streamlit_module, stored_result)
+
+
+def _build_playlist_preview_metadata(
+    *,
+    spotify_real_recommendation_result: SpotifyRealRecommendationResult,
+    track_ids: list[str],
+    ui_state: DemoUIState,
+) -> dict[str, str]:
+    """Build export-preview metadata from already generated recommendations."""
+
+    catalog = spotify_real_recommendation_result.candidate_set.track_catalog
+    duration_label = "Unavailable"
+    if not catalog.empty and "track_id" in catalog.columns:
+        duration_column = "duration_ms" if "duration_ms" in catalog.columns else "track_duration_ms"
+        if duration_column in catalog.columns:
+            selected_durations = pd.to_numeric(
+                catalog.loc[catalog["track_id"].astype(str).isin(track_ids), duration_column],
+                errors="coerce",
+            ).dropna()
+            if not selected_durations.empty:
+                total_seconds = int(round(float(selected_durations.sum()) / 1000))
+                duration_label = f"{total_seconds // 60}:{total_seconds % 60:02d}"
+    buckets = _get_spotify_recommendation_buckets(spotify_real_recommendation_result)
+    bucket_labels = [bucket.bucket_label.replace(" Picks", "") for bucket in buckets if bucket.recommendations]
+    return {
+        "mood": _format_mood_label(ui_state.mood_label),
+        "exploration": f"{int(round(ui_state.exploration_level * 100))}%",
+        "track_count": str(len(track_ids)),
+        "duration": duration_label,
+        "buckets": ", ".join(bucket_labels) or "Balanced recommendations",
+    }
 
 
 def _export_spotify_recommendations(
@@ -1493,9 +1696,12 @@ def _render_spotify_playlist_export_result(
     """Render the most recent Spotify playlist export result."""
 
     if export_result.success:
-        streamlit_module.success(export_result.message)
+        streamlit_module.success(f"✅ Playlist created. {export_result.message}")
         if export_result.playlist_url:
-            streamlit_module.markdown(f"[Open playlist on Spotify]({export_result.playlist_url})")
+            if hasattr(streamlit_module, "link_button"):
+                streamlit_module.link_button("Open playlist on Spotify", export_result.playlist_url)
+            else:  # pragma: no cover - retained for older Streamlit versions.
+                streamlit_module.markdown(f"[Open playlist on Spotify]({export_result.playlist_url})")
         return
     streamlit_module.warning(export_result.message)
 
@@ -1629,6 +1835,118 @@ def _build_badge_html(label: str, tone: str) -> str:
     """Return a compact HTML badge for recruiter-friendly status labels."""
 
     return f'<span class="demo-badge {tone}">{label}</span>'
+
+
+def _build_recommendation_card_html(
+    *,
+    explanation: DemoRecommendationExplanation | None,
+    bucket_label: str,
+    mood_label: str,
+    rank: int | None = None,
+    fallback_track_name: str = "Recommendation",
+    fallback_artist_name: str = "Unknown artist",
+    extra_badges: str = "",
+    rationale: str | None = None,
+) -> str:
+    """Build a compact, media-safe Spotify-style recommendation card."""
+
+    track_name = explanation.track_name if explanation is not None else fallback_track_name
+    artist_name = explanation.artist_name if explanation is not None else fallback_artist_name
+    album_image_url = explanation.album_image_url if explanation is not None else ""
+    spotify_url = explanation.spotify_url if explanation is not None else ""
+    card_rationale = rationale or _build_recommendation_card_rationale(explanation)
+    bucket_badge = _build_bucket_badge_html(bucket_label)
+    mood_badge = _build_mood_badge_html(mood_label)
+    mood_fit = _format_mood_fit_label(explanation)
+    image_html = (
+        f'<img class="recommendation-thumb" src="{escape(album_image_url, quote=True)}" alt="" />'
+        if album_image_url
+        else '<div class="recommendation-thumb-placeholder">No art</div>'
+    )
+    spotify_link_html = (
+        f'<a class="recommendation-link" href="{escape(spotify_url, quote=True)}" target="_blank">Open in Spotify</a>'
+        if spotify_url
+        else ""
+    )
+    rank_prefix = f"{rank}. " if rank is not None else ""
+    return """
+        <div class="recommendation-card">
+          {image_html}
+          <div class="recommendation-content">
+            <div class="recommendation-title">{rank_prefix}{track_name}</div>
+            <div class="recommendation-artist">{artist_name}</div>
+            <div>{bucket_badge}{mood_badge}{extra_badges}</div>
+            <div class="recommendation-reason"><strong>Why recommended:</strong> {rationale}</div>
+            <div class="recommendation-reason">Mood fit: {mood_fit}</div>
+            {spotify_link_html}
+          </div>
+        </div>
+        """.format(
+        image_html=image_html,
+        rank_prefix=escape(rank_prefix),
+        track_name=escape(str(track_name)),
+        artist_name=escape(str(artist_name)),
+        bucket_badge=bucket_badge,
+        mood_badge=mood_badge,
+        extra_badges=extra_badges,
+        rationale=escape(card_rationale),
+        mood_fit=escape(mood_fit),
+        spotify_link_html=spotify_link_html,
+    )
+
+
+def _build_bucket_badge_html(bucket_label: str) -> str:
+    """Return a product-oriented badge for a recommendation bucket."""
+
+    normalized_label = bucket_label.strip().lower()
+    if "familiar" in normalized_label:
+        return _build_badge_html("🎯 Familiar", "familiar")
+    if "discovery" in normalized_label:
+        return _build_badge_html("✨ Discovery", "discovery")
+    if "mood" in normalized_label:
+        return _build_badge_html("🎭 Mood-Based", "mood-based")
+    return _build_badge_html(bucket_label, "demo")
+
+
+def _build_mood_badge_html(mood_label: str) -> str:
+    """Return a compact mood badge for recommendation cards."""
+
+    return _build_badge_html(_format_mood_label(mood_label), "mood")
+
+
+def _format_mood_label(mood_label: str) -> str:
+    """Return an emoji-supported mood label for compact product UI."""
+
+    normalized_mood = mood_label.strip().lower()
+    mood_labels = {
+        "workout": "🔥 Workout",
+        "calm": "😌 Calm",
+        "happy": "😊 Happy",
+        "melancholic": "🌧 Melancholic",
+        "party": "🎉 Party",
+        "study": "📚 Study",
+    }
+    return mood_labels.get(normalized_mood, normalized_mood.title())
+
+
+def _format_mood_fit_label(explanation: DemoRecommendationExplanation | None) -> str:
+    """Map an existing explanation mood score into a short display label."""
+
+    if explanation is None:
+        return "Unavailable"
+    for line in explanation.spotify_rationale_lines:
+        if "Mood score:" not in line:
+            continue
+        try:
+            mood_score = float(line.split("Mood score:", maxsplit=1)[1].strip().rstrip("."))
+        except ValueError:
+            break
+        if mood_score >= 0.70:
+            return "High"
+        if mood_score >= 0.40:
+            return "Medium"
+        return "Low"
+    return "Available" if explanation.spotify_inferred_mood else "Unavailable"
 
 
 def _format_exploration_badge(exploration_level: float) -> str:

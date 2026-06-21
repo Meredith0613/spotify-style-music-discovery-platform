@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-red)]()
 [![Spotify API](https://img.shields.io/badge/Spotify-API-1DB954)]()
-[![Tests](https://img.shields.io/badge/tests-126%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-131%20passed-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-v1.0%20portfolio--ready-success)]()
 
 A Spotify-style music discovery platform that combines real Spotify listening history, hybrid recommendation, ALS matrix factorization, Word2Vec-style track embeddings, mood-aware reranking, and explainable recommendations in an interactive Streamlit app.
@@ -46,9 +46,11 @@ This is not a production-scale Spotify deployment. It is a portfolio project tha
 - **Diversity-aware reranking**: Spotify mode deduplicates candidate versions, tracks artist concentration, and applies artist/source diversity before final truncation.
 - **Control-sensitive ranking**: Exploration and ranking-focus controls use distinct Familiar, Discovery, Balanced, and Mood-first profiles so filter changes visibly reorder real Spotify recommendations.
 - **Mood Dominance Calibration**: Mood-first and Mood-Based ranking treat mood as a ranking profile, not a small bonus, while Balanced keeps mood influence moderate.
+- **v1.7 UI & Product Polish**: Compact Spotify-style recommendation cards, a Music Personality panel, playlist export preview, and cleaner preference-only demo controls.
 - **Recommendation buckets**: Spotify mode can show familiar, discovery, and mood-based recommendation sections.
 - **Spotify playlist export**: Real Spotify recommendations can be saved into a private Spotify playlist.
 - **Taste profile visualization**: Spotify mode summarizes recent taste with a cluster label, top artists, top genres, and a 2D taste map.
+- **Playlist preview and export**: Spotify mode previews mood, exploration, track count, available duration, and included buckets before saving a private playlist.
 - **Streamlit UI**: The app is demoable locally with or without Spotify credentials.
 - **Explainable recommendation chain**: Recommendation cards show rationale, source labels, Spotify links, and album art when available.
 - **Mood-aware playlist generation**: Recommendations can be sequenced into an interpretable mood-aware playlist, using audio-feature mood profiles when available and metadata keyword fallback when unavailable.

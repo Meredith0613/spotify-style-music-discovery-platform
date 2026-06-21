@@ -10,7 +10,7 @@ from app.demo_data import DemoUserProfile
 from app.demo_service import DemoViewState
 from app.streamlit_app import _render_taste_profile_summary
 from models.playlist_generator import GeneratedPlaylist
-from services.spotify_candidate_service import SpotifyCandidateSet, SpotifyRealRecommendationResult
+from services.spotify_candidate_service import SpotifyCandidateSet, SpotifyCandidateTrack, SpotifyRealRecommendationResult
 from services.taste_profile_service import TasteProfileService, TasteProfileSummary
 from services.user_profile_service import ListeningHistorySnapshot, RecentTrackSummary
 
@@ -57,7 +57,7 @@ class FakeStreamlitModule:
     def metric(self, label: str, value: str) -> None:
         self.messages.append(f"{label}: {value}")
 
-    def markdown(self, text: str) -> None:
+    def markdown(self, text: str, **kwargs: object) -> None:
         self.messages.append(text)
 
     def write(self, text: str) -> None:
@@ -108,6 +108,54 @@ def test_taste_profile_service_handles_missing_genres() -> None:
 
     assert summary.top_genres == []
     assert summary.plot_points
+
+
+def test_taste_profile_service_uses_recent_summary_artists() -> None:
+    """Recent Spotify summaries should take priority for the displayed top artist."""
+
+    snapshot = build_snapshot()
+    snapshot.track_level_frame = snapshot.track_level_frame.drop(columns=["artist_name"])
+    snapshot.track_level_frame["primary_artist_name"] = ["Primary Recent Artist"] * len(
+        snapshot.track_level_frame
+    )
+    snapshot.recent_tracks = [
+        RecentTrackSummary(
+            track_id="recent_1",
+            track_name="Bright Run",
+            artist_name="Recent Summary Artist",
+            played_at="2026-06-01T00:00:00Z",
+        )
+    ]
+
+    summary = build_service().build_taste_profile(
+        listening_history_snapshot=snapshot,
+        spotify_real_recommendation_result=build_real_result(),
+    )
+
+    assert summary.top_artists[0] == "Recent Summary Artist"
+
+
+def test_taste_profile_service_falls_back_to_real_candidate_artists() -> None:
+    """Candidate artist labels should populate a sparse real Spotify session."""
+
+    snapshot = build_snapshot()
+    snapshot.recent_tracks = []
+    snapshot.track_level_frame = snapshot.track_level_frame.drop(columns=["artist_name"])
+    result = build_real_result()
+    result.candidate_set.candidates = [
+        SpotifyCandidateTrack(
+            spotify_track_id="candidate_1",
+            track_name="Alternative Spark",
+            artist_name="Candidate Artist",
+        )
+    ]
+
+    summary = build_service().build_taste_profile(
+        listening_history_snapshot=snapshot,
+        spotify_real_recommendation_result=result,
+    )
+
+    assert summary.top_artists[0] == "Candidate Artist"
 
 
 def test_taste_profile_service_handles_metadata_only_features() -> None:
@@ -183,8 +231,9 @@ def test_taste_profile_summary_renderer_handles_empty_fallback_summary() -> None
         ),
     )
 
-    assert "Your Taste Profile" in streamlit_module.messages
-    assert "Cluster: Not enough data" in streamlit_module.messages
+    assert "Your Music Personality" in streamlit_module.messages
+    assert any("Taste Cluster" in message for message in streamlit_module.messages)
+    assert any("Not enough data" in message for message in streamlit_module.messages)
 
 
 def build_snapshot(track_count: int = 2) -> ListeningHistorySnapshot:
